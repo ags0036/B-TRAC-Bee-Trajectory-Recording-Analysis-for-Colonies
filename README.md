@@ -25,8 +25,7 @@ createMapVisualization.m - Creates GPS maps with bearing arrows and hive locatio
 
 ### User Guide:
 Here is the User interface of B-TRAC:
-![User Interface]([https://github.com/adam-p/markdown-here/raw/master/src/common/images/icon48.png "Logo Title Text 1"](https://github.com/lm0116/B-TRAC-Bee-Trajectory-Recording-Analysis-for-Colonies/blob/main/GUI%20First%20Iteration%20Picture.png?raw=true
-))
+![User Interface](https://github.com/lm0116/B-TRAC-Bee-Trajectory-Recording-Analysis-for-Colonies/blob/main/GUI%20First%20Iteration%20Picture.png?raw=true)
 
 Step 1: Add Observation Sessions
 
