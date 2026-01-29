@@ -147,5 +147,6 @@ Step 5: Export Results
 3. **Required MATLAB Toolboxes:**
    - Computer Vision Toolbox
    - Image Processing Toolbox
-   - Statistics and Machine Learning Toolbox
+   - Statistics
+
 *** TODO: Once tested, add comments about using installer and running the executable
