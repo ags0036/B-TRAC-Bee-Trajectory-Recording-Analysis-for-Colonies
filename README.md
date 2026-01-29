@@ -23,7 +23,7 @@ BTRAC_GUI.m - The main application with GUI controls, session management, and wo
 processVideoSession.m - The core computer vision engine that handles bee detection, tracking, and bearing calculations
 createMapVisualization.m - Creates GPS maps with bearing arrows and hive location markers
 
-### User Guide:
+## User Guide:
 Here is the User interface of B-TRAC:
 ![User Interface](https://github.com/lm0116/B-TRAC-Bee-Trajectory-Recording-Analysis-for-Colonies/blob/main/GUI%20First%20Iteration%20Picture.png?raw=true)
 
@@ -117,10 +117,10 @@ Step 5: Export Results
   - Statistical clustering
 
 **Interpretation:**
-- >80%: Excellent - bees show strong directional preference
+- 80%: Excellent - bees show strong directional preference
 - 60-80%: Good - clear pattern visible
 - 40-60%: Fair - some scatter but usable
-- <40%: Poor - consider recollecting data
+- 40%: Poor - consider recollecting data
 
 ### Hive Location Estimate
 
@@ -139,7 +139,7 @@ Step 5: Export Results
   - Number of observation points
 
 
-### Compilation Guide:
+## Compilation Guide:
 
 **Required Software**
 1. **MATLAB** 
