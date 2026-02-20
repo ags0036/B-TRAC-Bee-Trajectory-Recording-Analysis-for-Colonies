@@ -4,12 +4,11 @@ This repository contains the software implementation for B-TRAC, an automated sy
 
 The codebase follows a modular video-to-geolocation processing pipeline. Raw video captured from a calibrated, fixed-geometry camera is first preprocessed to compensate for lens distortion and stabilize the scene. Background subtraction and motion-based filtering are then applied to isolate moving objects in outdoor environments with clutter, changing lighting, and foliage motion. Candidate bee detections are tracked frame-to-frame using lightweight object tracking logic to form short flight trajectories during takeoff.
 
-From each valid trajectory, a departure angle is computed relative to the camera’s calibrated reference frame. Individual bearings are aggregated across many detected bees, and statistical averaging is used to reduce noise and outliers caused by turbulence, tracking error, or anomalous flight paths. This produces a dominant bearing that represents the most likely direction of the hive from a given feeder location.
+From each valid trajectory, a departure angle is computed relative to the camera’s calibrated reference frame. Individual bearings are aggregated across many detected bees, and statistical averaging is used to reduce noise and outliers. This produces a dominant bearing that represents the most likely direction of the hive from a given feeder location.
 
 The software supports combining multiple recording sessions taken at different GPS-tagged feeder positions. Bearings from each location are projected onto a geographic coordinate system, and intersection analysis is used to estimate candidate hive locations. Results are visualized on GPS-based maps to support field validation and iterative data collection.
 
-Overall, the code emphasizes robustness to outdoor conditions, clear separation between processing stages, and extensibility for future improvements in detection accuracy, mapping, or hardware integration.
-
+### Objectives
 
 This MATLAB codebase implements an automated system for tracking honey bee flight trajectories from video data and triangulating wild hive locations. The system processes video from multiple observation points to:
 
@@ -24,7 +23,9 @@ BTRAC_GUI.m - The main application with GUI controls, session management, and wo
 processVideoSession.m - The core computer vision engine that handles bee detection, tracking, and bearing calculations
 createMapVisualization.m - Creates GPS maps with bearing arrows and hive location markers
 
-### User Guide:
+## User Guide:
+Here is the User interface of B-TRAC:
+![User Interface](https://github.com/lm0116/B-TRAC-Bee-Trajectory-Recording-Analysis-for-Colonies/blob/main/GUI%20First%20Iteration%20Picture.png?raw=true)
 
 Step 1: Add Observation Sessions
 
@@ -116,10 +117,10 @@ Step 5: Export Results
   - Statistical clustering
 
 **Interpretation:**
-- >80%: Excellent - bees show strong directional preference
+- 80%: Excellent - bees show strong directional preference
 - 60-80%: Good - clear pattern visible
 - 40-60%: Fair - some scatter but usable
-- <40%: Poor - consider recollecting data
+- 40%: Poor - consider recollecting data
 
 ### Hive Location Estimate
 
@@ -138,7 +139,7 @@ Step 5: Export Results
   - Number of observation points
 
 
-### Compilation Guide:
+## Compilation Guide:
 
 **Required Software**
 1. **MATLAB** 
@@ -146,6 +147,6 @@ Step 5: Export Results
 3. **Required MATLAB Toolboxes:**
    - Computer Vision Toolbox
    - Image Processing Toolbox
-   - Statistics and Machine Learning Toolbox
+   - Statistics
 
-- We plan on providing Installer and executables
+*** TODO: Once tested, add comments about using installer and running the executable
