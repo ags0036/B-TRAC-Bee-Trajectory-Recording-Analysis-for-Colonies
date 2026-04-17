@@ -17,6 +17,7 @@ function BTRAC_GUI()
     %  "DEFINE" FLAGS  —  edit the two lines below                        %
     TEST_MODE     = false;          % true  = skip GUI, show synthetic plots
     TEST_SCENARIO = 'beeline';      % 'beeline' | 'scatter' | 'long_range' | 'close_range'
+    NO_BEARINGANALYSIS = true;      % set to true to skip bearing analysis, this is customer requirement, as traingulation methods need to be reworkered.
     % ------------------------------------------------------------------ %
 
     if TEST_MODE
@@ -378,25 +379,37 @@ function BTRAC_GUI()
                 appData.sessions(i).departureAngles = angles;
                 appData.sessions(i).processed       = true;
 
-                [appData.sessions(i).avgBearing, ...
-                 appData.sessions(i).confidence] = analyzeBearings(angles);
-
+                % ── Bearing analysis — skipped when NO_BEARINGANALYSIS = true ──
+                if ~NO_BEARINGANALYSIS
+                    [appData.sessions(i).avgBearing, ...
+                     appData.sessions(i).confidence] = analyzeBearings(angles);
+                else
+                    appData.sessions(i).avgBearing = NaN;
+                    appData.sessions(i).confidence = NaN;
+                end
                 refreshSessionList();
             end
 
             progressBar.Value = 100;
-            setStatus('Triangulating hive location...');
             drawnow;
 
-            done = appData.sessions([appData.sessions.processed]);
-            if length(done) >= 2
-                hive = triangulateHive(done);
-                appData.results.estimatedHiveLocation = hive;
-                createMapVisualization(done, hive, resultsAxes);
-                setStatus(sprintf('Done! Hive approx [%.6f, %.6f]', hive(1), hive(2)));
+            % ── Post-processing — skipped when NO_BEARINGANALYSIS = true ──────
+            if ~NO_BEARINGANALYSIS
+                setStatus('Triangulating hive location...');
+                done = appData.sessions([appData.sessions.processed]);
+                if length(done) >= 2
+                    hive = triangulateHive(done);
+                    appData.results.estimatedHiveLocation = hive;
+                    createMapVisualization(done, hive, resultsAxes);
+                    setStatus(sprintf('Done! Hive approx [%.6f, %.6f]', hive(1), hive(2)));
+                else
+                    showSingleResult(done(1));
+                    setStatus('Done (single session - add more for triangulation).');
+                end
             else
-                showSingleResult(done(1));
-                setStatus('Done (single session - add more for triangulation).');
+                setStatus(sprintf('Done. Bearing analysis skipped (NO_BEARINGANALYSIS=true). %d session(s) processed.', ...
+                          length(appData.sessions)));
+                fprintf('  [BTRAC] Bearing analysis disabled — set NO_BEARINGANALYSIS=false to enable.\n');
             end
 
             exportBtn.Enable = 'on';
