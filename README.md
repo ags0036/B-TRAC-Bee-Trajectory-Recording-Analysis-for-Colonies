@@ -22,3 +22,5 @@ Please refer to the Guide below for a system and software outline
 
 https://docs.google.com/document/d/1KPP2rXnb4UvYPogX0u7hKUG5933_F7JgSibBqRx4bSU/edit?usp=sharing
 
+### Software Outline
+https://drive.google.com/file/d/1y3ppd6XndHXE6Ne2qnchjI21DGKJ-QM7/view?usp=sharing
