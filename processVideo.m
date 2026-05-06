@@ -4,15 +4,6 @@ function [trajectories, departureAngles] = processVideo(session, cameraParams, d
 %   Detection: YOLOv8 deep learning via bee_tracker_btrac.py
 %              Model is loaded ONCE per video (not per frame).
 %              Requires Python + ultralytics + trained best.pt model.
-%
-%   CHANGE FROM ORIGINAL:
-%     Old approach: spawned Python + YOLO for EVERY frame (slow, fragile).
-%     New approach: calls bee_tracker_btrac.py ONCE per video, which streams
-%     the full video in Python and writes btrac_detections.csv. MATLAB then
-%     reads that single CSV and runs the tracker entirely in MATLAB.
-%     This matches the architecture of bee_tracker.py (the pendulum script
-%     that worked well) — model loaded once, whole video streamed.
-
     trajectories    = {};
     departureAngles = [];
 
@@ -196,38 +187,48 @@ function detCSV = runBTracPython(videoPath, yoloConfig)
         error('bee_tracker_btrac.py not found.');
     end
 
-    outCSV = 'btrac_detections.csv';
-    logFile = 'btrac_python.log';
+    % Use the app's own folder for all output files so we never write to
+    % a network share (\\psf\...) or a read-only CWD — both cause
+    % "Access is denied" when Java tries to create the log file.
+    appDir  = fileparts(mfilename('fullpath'));
+    outCSV  = fullfile(appDir, 'btrac_detections.csv');
+    logFile = fullfile(appDir, 'btrac_python.log');
 
     % Delete stale files
     if exist(outCSV,  'file'), delete(outCSV);  end
     if exist(logFile, 'file'), delete(logFile); end
 
-    % Build command — quoted paths handle spaces on Windows
-    cmd = sprintf('"%s" "%s" "%s" "%s" --conf %.3f --imgsz %d --every_n %d --class_id %d --output "%s"', ...
-        yoloConfig.pythonExe, scriptPath, ...
-        yoloConfig.modelPath, videoPath, ...
-        yoloConfig.confidenceThreshold, ...
-        yoloConfig.imgSize, ...
-        yoloConfig.frameSample, ...
-        yoloConfig.classId, ...
-        outCSV);
-
     % Launch Python — redirect output to log file, run in background
     % so we can tail the log. We use ProcessBuilder just to get the
     % handle for waitFor(); all output goes to the log.
-    tokens = strsplit(cmd);
-    jArray = javaArray('java.lang.String', numel(tokens));
-    for k = 1:numel(tokens)
-        jArray(k) = java.lang.String(tokens{k});
-    end
+    %
+    % IMPORTANT: Do NOT use strsplit(cmd) to build the token list.
+    % strsplit splits on every space, which shatters quoted paths that
+    % contain spaces (e.g. "C:\My Videos\bee.mp4" → broken tokens).
+    % Instead, pass each argument as a separate string directly so that
+    % ProcessBuilder receives a clean, correctly-quoted argument list.
     jList = java.util.ArrayList();
-    for k = 1:numel(tokens)
-        jList.add(jArray(k));
-    end
+    jList.add(java.lang.String(yoloConfig.pythonExe));
+    jList.add(java.lang.String(scriptPath));
+    jList.add(java.lang.String(yoloConfig.modelPath));
+    jList.add(java.lang.String(videoPath));
+    jList.add(java.lang.String('--conf'));
+    jList.add(java.lang.String(sprintf('%.3f', yoloConfig.confidenceThreshold)));
+    jList.add(java.lang.String('--imgsz'));
+    jList.add(java.lang.String(sprintf('%d', yoloConfig.imgSize)));
+    jList.add(java.lang.String('--every_n'));
+    jList.add(java.lang.String(sprintf('%d', yoloConfig.frameSample)));
+    jList.add(java.lang.String('--class_id'));
+    jList.add(java.lang.String(sprintf('%d', yoloConfig.classId)));
+    jList.add(java.lang.String('--output'));
+    jList.add(java.lang.String(outCSV));
 
     pb = java.lang.ProcessBuilder(jList);
     pb.redirectErrorStream(true);
+    % Use the absolute logFile path — relative paths are resolved from
+    % Java's working directory, which may be a network share (\\psf\...)
+    % and will throw "Access is denied". fullfile() above gave us an
+    % absolute local path, so this is always safe.
     pb.redirectOutput(java.io.File(logFile));
     process = pb.start();
 
