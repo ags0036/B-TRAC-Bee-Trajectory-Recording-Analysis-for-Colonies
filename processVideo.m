@@ -235,7 +235,7 @@ function detCSV = runBTracPython(videoPath, yoloConfig)
     % ── Tail the log file until Python exits ────────────────────────────
     lastLine  = 0;
     t0        = tic;
-    TIMEOUT_S = 3600;   % 1 hour — long videos can take a while
+    TIMEOUT_S = 999999999999;   % maxing out timeout for now
 
     fprintf('  [BTRAC] Python running... (output from btrac_python.log)\n');
 
