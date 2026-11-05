@@ -1,4 +1,4 @@
-function [avgBearing, confidence] = analyzeBearings(departureAngles)
+function [avgBearing, confidence] = bearingAnalysis(departureAngles)
 % Aggregate individual bearings beta_i into a single session average.
 %
 %  Report: "Multiple individual bearings collected at a single observation
@@ -93,131 +93,131 @@ function hive = triangulateHive(sessions)
     hive = [hLat, hLon];
 end
 
+% Moved to its own file
+% function createMapVisualization(sessions, hive, ax)
+% % Draw the full map:
+% %   - Bearing rays from each observation point (unit direction vectors)
+% %   - Pairwise intersection points of all rays
+% %   - Least-squares best-fit hive location
+% %   - Observation point markers with session labels
+% %
+% % Local ENU coordinate system centred on the map centroid.
+% 
+%     nObs    = length(sessions);
+%     obsLats = arrayfun(@(s) s.gpsCoords(1), sessions);
+%     obsLons = arrayfun(@(s) s.gpsCoords(2), sessions);
+%     brgs    = arrayfun(@(s) s.avgBearing,   sessions);
+%     confs   = arrayfun(@(s) s.confidence,   sessions);
+% 
+%     % Common ENU origin = centroid of all points including hive
+%     cLat = mean([obsLats, hive(1)]);
+%     cLon = mean([obsLons, hive(2)]);
+% 
+%     [obsX, obsY]   = ll2xy(obsLats, obsLons, cLat, cLon);
+%     [hiveX, hiveY] = ll2xy(hive(1), hive(2), cLat, cLon);
+% 
+%     cla(ax);  hold(ax, 'on');
+%     setAxesBounds(ax, [obsX, hiveX], [obsY, hiveY]);
+% 
+%     RAY_LEN = 5000;  % metres - length of drawn bearing rays
+% 
+%     % ── 1. Bearing rays (r_i(t) = p_i + t*v_i) ──────────────────────────
+%     % Store endpoints for intersection calculation
+%     rayEnds = zeros(nObs, 2);
+%     for i = 1:nObs
+%         % Unit direction vector: v = [sin(beta), cos(beta)]
+%         v      = [sind(brgs(i)), cosd(brgs(i))];
+%         endPt  = [obsX(i), obsY(i)] + RAY_LEN * v;
+%         rayEnds(i,:) = endPt;
+% 
+%         col = confColor(confs(i));
+%         lw  = 1.5 + 2 * confs(i);
+%         plot(ax, [obsX(i), endPt(1)], [obsY(i), endPt(2)], ...
+%              '-', 'Color', col, 'LineWidth', lw);
+%         drawArrow(ax, obsX(i), obsY(i), endPt(1), endPt(2), col, 40);
+%     end
+% 
+%     % ── 2. Pairwise intersections (all ray pairs) ──────────────────────
+%     % Line i: p = P_i + t * v_i
+%     % Solve: [v_i, -v_j] * [t; u] = P_j - P_i  (2x2 linear system)
+%     EPS_PARALLEL = 1e-10;
+%     intersections = [];
+%     for i = 1:nObs
+%         for j = i+1:nObs
+%             p1 = [obsX(i); obsY(i)];
+%             p2 = [obsX(j); obsY(j)];
+%             v1 = [sind(brgs(i)); cosd(brgs(i))];
+%             v2 = [sind(brgs(j)); cosd(brgs(j))];
+% 
+%             Amat = [v1, -v2];
+%             detA = det(Amat);
+%             if abs(detA) < EPS_PARALLEL, continue; end  % near-parallel rays
+% 
+%             tu   = Amat \ (p2 - p1);
+%             t    = tu(1);
+%             if t < 0, continue; end   % intersection behind observation point
+% 
+%             pInt = p1 + t * v1;
+%             intersections(end+1, :) = pInt'; %#ok<AGROW>
+%         end
+%     end
+% 
+%     if ~isempty(intersections)
+%         plot(ax, intersections(:,1), intersections(:,2), 'bx', ...
+%              'MarkerSize', 10, 'LineWidth', 2, 'DisplayName', 'Ray Intersections');
+%     end
+% 
+%     % ── 3. Observation point markers ──────────────────────────────────
+%     for i = 1:nObs
+%         plot(ax, obsX(i), obsY(i), 'o', 'MarkerSize', 12, ...
+%              'MarkerFaceColor', [0.2 0.4 0.8], 'MarkerEdgeColor', 'white', 'LineWidth', 2);
+%         text(ax, obsX(i)+30, obsY(i)+30, sessions(i).name, ...
+%              'FontSize', 10, 'FontWeight', 'bold', 'BackgroundColor', [1 1 1 0.7]);
+%     end
+% 
+%     % ── 4. Best-fit hive (p*) ─────────────────────────────────────────
+%     plot(ax, hiveX, hiveY, 'p', 'MarkerSize', 28, ...
+%          'MarkerFaceColor', [0.2 0.8 0.2], 'MarkerEdgeColor', 'black', 'LineWidth', 2);
+%     text(ax, hiveX+40, hiveY+40, sprintf('Best-fit Hive\n%.6f, %.6f', hive(1), hive(2)), ...
+%          'FontSize', 11, 'FontWeight', 'bold', 'Color', [0 0.5 0], ...
+%          'BackgroundColor', [1 1 1 0.85]);
+% 
+%     % ── Axis formatting ───────────────────────────────────────────────
+%     axis(ax, 'equal');  grid(ax, 'on');
+%     xlabel(ax, 'East (m)',  'FontWeight', 'bold');
+%     ylabel(ax, 'North (m)', 'FontWeight', 'bold');
+%     title(ax, sprintf('B-TRAC: Estimated Hive Location [%.6f, %.6f]', hive(1), hive(2)), ...
+%           'FontSize', 12, 'FontWeight', 'bold');
+% 
+%     % Legend
+%     legend(ax, {'Bearing Ray','','Pairwise Intersection','Observation Point','','Best-fit Hive'}, ...
+%            'Location', 'bestoutside', 'FontSize', 9);
+% 
+%     addScaleBar(ax);
+%     addCompassRose(ax);
+%     hold(ax, 'off');
+% end
 
-function createMapVisualization(sessions, hive, ax)
-% Draw the full map:
-%   - Bearing rays from each observation point (unit direction vectors)
-%   - Pairwise intersection points of all rays
-%   - Least-squares best-fit hive location
-%   - Observation point markers with session labels
-%
-% Local ENU coordinate system centred on the map centroid.
-
-    nObs    = length(sessions);
-    obsLats = arrayfun(@(s) s.gpsCoords(1), sessions);
-    obsLons = arrayfun(@(s) s.gpsCoords(2), sessions);
-    brgs    = arrayfun(@(s) s.avgBearing,   sessions);
-    confs   = arrayfun(@(s) s.confidence,   sessions);
-
-    % Common ENU origin = centroid of all points including hive
-    cLat = mean([obsLats, hive(1)]);
-    cLon = mean([obsLons, hive(2)]);
-
-    [obsX, obsY]   = ll2xy(obsLats, obsLons, cLat, cLon);
-    [hiveX, hiveY] = ll2xy(hive(1), hive(2), cLat, cLon);
-
-    cla(ax);  hold(ax, 'on');
-    setAxesBounds(ax, [obsX, hiveX], [obsY, hiveY]);
-
-    RAY_LEN = 5000;  % metres - length of drawn bearing rays
-
-    % ── 1. Bearing rays (r_i(t) = p_i + t*v_i) ──────────────────────────
-    % Store endpoints for intersection calculation
-    rayEnds = zeros(nObs, 2);
-    for i = 1:nObs
-        % Unit direction vector: v = [sin(beta), cos(beta)]
-        v      = [sind(brgs(i)), cosd(brgs(i))];
-        endPt  = [obsX(i), obsY(i)] + RAY_LEN * v;
-        rayEnds(i,:) = endPt;
-
-        col = confColor(confs(i));
-        lw  = 1.5 + 2 * confs(i);
-        plot(ax, [obsX(i), endPt(1)], [obsY(i), endPt(2)], ...
-             '-', 'Color', col, 'LineWidth', lw);
-        drawArrow(ax, obsX(i), obsY(i), endPt(1), endPt(2), col, 40);
-    end
-
-    % ── 2. Pairwise intersections (all ray pairs) ──────────────────────
-    % Line i: p = P_i + t * v_i
-    % Solve: [v_i, -v_j] * [t; u] = P_j - P_i  (2x2 linear system)
-    EPS_PARALLEL = 1e-10;
-    intersections = [];
-    for i = 1:nObs
-        for j = i+1:nObs
-            p1 = [obsX(i); obsY(i)];
-            p2 = [obsX(j); obsY(j)];
-            v1 = [sind(brgs(i)); cosd(brgs(i))];
-            v2 = [sind(brgs(j)); cosd(brgs(j))];
-
-            Amat = [v1, -v2];
-            detA = det(Amat);
-            if abs(detA) < EPS_PARALLEL, continue; end  % near-parallel rays
-
-            tu   = Amat \ (p2 - p1);
-            t    = tu(1);
-            if t < 0, continue; end   % intersection behind observation point
-
-            pInt = p1 + t * v1;
-            intersections(end+1, :) = pInt'; %#ok<AGROW>
-        end
-    end
-
-    if ~isempty(intersections)
-        plot(ax, intersections(:,1), intersections(:,2), 'bx', ...
-             'MarkerSize', 10, 'LineWidth', 2, 'DisplayName', 'Ray Intersections');
-    end
-
-    % ── 3. Observation point markers ──────────────────────────────────
-    for i = 1:nObs
-        plot(ax, obsX(i), obsY(i), 'o', 'MarkerSize', 12, ...
-             'MarkerFaceColor', [0.2 0.4 0.8], 'MarkerEdgeColor', 'white', 'LineWidth', 2);
-        text(ax, obsX(i)+30, obsY(i)+30, sessions(i).name, ...
-             'FontSize', 10, 'FontWeight', 'bold', 'BackgroundColor', [1 1 1 0.7]);
-    end
-
-    % ── 4. Best-fit hive (p*) ─────────────────────────────────────────
-    plot(ax, hiveX, hiveY, 'p', 'MarkerSize', 28, ...
-         'MarkerFaceColor', [0.2 0.8 0.2], 'MarkerEdgeColor', 'black', 'LineWidth', 2);
-    text(ax, hiveX+40, hiveY+40, sprintf('Best-fit Hive\n%.6f, %.6f', hive(1), hive(2)), ...
-         'FontSize', 11, 'FontWeight', 'bold', 'Color', [0 0.5 0], ...
-         'BackgroundColor', [1 1 1 0.85]);
-
-    % ── Axis formatting ───────────────────────────────────────────────
-    axis(ax, 'equal');  grid(ax, 'on');
-    xlabel(ax, 'East (m)',  'FontWeight', 'bold');
-    ylabel(ax, 'North (m)', 'FontWeight', 'bold');
-    title(ax, sprintf('B-TRAC: Estimated Hive Location [%.6f, %.6f]', hive(1), hive(2)), ...
-          'FontSize', 12, 'FontWeight', 'bold');
-
-    % Legend
-    legend(ax, {'Bearing Ray','','Pairwise Intersection','Observation Point','','Best-fit Hive'}, ...
-           'Location', 'bestoutside', 'FontSize', 9);
-
-    addScaleBar(ax);
-    addCompassRose(ax);
-    hold(ax, 'off');
-end
-
-
-function exportResults(results, savePath, baseName, ax)
-% Save .mat, map PNG, per-session bearing CSVs, and text summary.
-    save(fullfile(savePath, [baseName '.mat']), 'results');
-    try
-        exportgraphics(ax, fullfile(savePath, [baseName '_map.png']), 'Resolution', 300);
-    catch
-        warning('Map image export failed.');
-    end
-    for i = 1:length(results.sessions)
-        s = results.sessions(i);
-        if s.processed && ~isempty(s.departureAngles)
-            T = table((1:length(s.departureAngles))', s.departureAngles, ...
-                      'VariableNames', {'TrajectoryID', 'Bearing_Degrees'});
-            writetable(T, fullfile(savePath, ...
-                       sprintf('%s_session%d_bearings.csv', baseName, i)));
-        end
-    end
-    writeSummary(results, fullfile(savePath, [baseName '_summary.txt']));
-end
+% Moved to its own file
+% function exportResults(results, savePath, baseName, ax)
+% % Save .mat, map PNG, per-session bearing CSVs, and text summary.
+%     save(fullfile(savePath, [baseName '.mat']), 'results');
+%     try
+%         exportgraphics(ax, fullfile(savePath, [baseName '_map.png']), 'Resolution', 300);
+%     catch
+%         warning('Map image export failed.');
+%     end
+%     for i = 1:length(results.sessions)
+%         s = results.sessions(i);
+%         if s.processed && ~isempty(s.departureAngles)
+%             T = table((1:length(s.departureAngles))', s.departureAngles, ...
+%                       'VariableNames', {'TrajectoryID', 'Bearing_Degrees'});
+%             writetable(T, fullfile(savePath, ...
+%                        sprintf('%s_session%d_bearings.csv', baseName, i)));
+%         end
+%     end
+%     writeSummary(results, fullfile(savePath, [baseName '_summary.txt']));
+% end
 
 
 %% =========================================================================
@@ -330,39 +330,39 @@ end
 %% =========================================================================
 %% TEXT SUMMARY
 %% =========================================================================
-
-function writeSummary(results, filename)
-    fid = fopen(filename, 'w');
-    fprintf(fid, 'B-TRAC ANALYSIS SUMMARY\n=======================\n\n');
-    fprintf(fid, 'Analysis Date: %s\n\n', char(results.analysisDate));
-    if isfield(results,'yoloConfig') && results.yoloConfig.useYOLO
-        fprintf(fid, 'Detection Method : YOLO\n');
-        fprintf(fid, '  Model          : %s\n',   results.yoloConfig.modelPath);
-        fprintf(fid, '  Confidence     : %.2f\n', results.yoloConfig.confidenceThreshold);
-        fprintf(fid, '  Frame sample   : %d\n\n', results.yoloConfig.frameSample);
-    else
-        fprintf(fid, 'Detection Method : Background Subtraction\n\n');
-    end
-    fprintf(fid, 'Triangulation Method: Perpendicular-distance least squares\n');
-    fprintf(fid, '  p* = argmin sum_i || (I - v_i*v_i'') * (p - p_i) ||^2\n\n');
-    fprintf(fid, 'OBSERVATION SESSIONS:\n');
-    for i = 1:length(results.sessions)
-        s = results.sessions(i);
-        fprintf(fid, '\n  Session %d : %s\n',         i, s.name);
-        fprintf(fid, '  Location  : [%.6f, %.6f]\n', s.gpsCoords(1), s.gpsCoords(2));
-        fprintf(fid, '  Camera bearing: %.1f deg\n',  s.compassBearing);
-        if s.processed
-            fprintf(fid, '  Tracks      : %d\n',        length(s.trajectories));
-            fprintf(fid, '  Avg Bearing : %.2f deg\n',  s.avgBearing);
-            fprintf(fid, '  Confidence  : %.1f%%\n',    s.confidence*100);
-        end
-    end
-    if ~isempty(results.estimatedHiveLocation)
-        hl = results.estimatedHiveLocation;
-        fprintf(fid, '\n\nESTIMATED HIVE LOCATION (best-fit p*):\n');
-        fprintf(fid, '  Latitude  : %.8f\n', hl(1));
-        fprintf(fid, '  Longitude : %.8f\n', hl(2));
-        fprintf(fid, '\nGoogle Maps: https://maps.google.com/?q=%.8f,%.8f\n', hl(1), hl(2));
-    end
-    fclose(fid);
-end
+%% moved to exportResults since it is used within that function
+% function writeSummary(results, filename)
+%     fid = fopen(filename, 'w');
+%     fprintf(fid, 'B-TRAC ANALYSIS SUMMARY\n=======================\n\n');
+%     fprintf(fid, 'Analysis Date: %s\n\n', char(results.analysisDate));
+%     if isfield(results,'yoloConfig') && results.yoloConfig.useYOLO
+%         fprintf(fid, 'Detection Method : YOLO\n');
+%         fprintf(fid, '  Model          : %s\n',   results.yoloConfig.modelPath);
+%         fprintf(fid, '  Confidence     : %.2f\n', results.yoloConfig.confidenceThreshold);
+%         fprintf(fid, '  Frame sample   : %d\n\n', results.yoloConfig.frameSample);
+%     else
+%         fprintf(fid, 'Detection Method : Background Subtraction\n\n');
+%     end
+%     fprintf(fid, 'Triangulation Method: Perpendicular-distance least squares\n');
+%     fprintf(fid, '  p* = argmin sum_i || (I - v_i*v_i'') * (p - p_i) ||^2\n\n');
+%     fprintf(fid, 'OBSERVATION SESSIONS:\n');
+%     for i = 1:length(results.sessions)
+%         s = results.sessions(i);
+%         fprintf(fid, '\n  Session %d : %s\n',         i, s.name);
+%         fprintf(fid, '  Location  : [%.6f, %.6f]\n', s.gpsCoords(1), s.gpsCoords(2));
+%         fprintf(fid, '  Camera bearing: %.1f deg\n',  s.compassBearing);
+%         if s.processed
+%             fprintf(fid, '  Tracks      : %d\n',        length(s.trajectories));
+%             fprintf(fid, '  Avg Bearing : %.2f deg\n',  s.avgBearing);
+%             fprintf(fid, '  Confidence  : %.1f%%\n',    s.confidence*100);
+%         end
+%     end
+%     if ~isempty(results.estimatedHiveLocation)
+%         hl = results.estimatedHiveLocation;
+%         fprintf(fid, '\n\nESTIMATED HIVE LOCATION (best-fit p*):\n');
+%         fprintf(fid, '  Latitude  : %.8f\n', hl(1));
+%         fprintf(fid, '  Longitude : %.8f\n', hl(2));
+%         fprintf(fid, '\nGoogle Maps: https://maps.google.com/?q=%.8f,%.8f\n', hl(1), hl(2));
+%     end
+%     fclose(fid);
+% end
