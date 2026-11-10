@@ -85,9 +85,15 @@ function [trajectories, departureAngles, trajectoryIDs] = processVideo(session, 
                 totalDetections = totalDetections + numel(dets);
             end
 
+            % [activeTrackers, trajectories, nextTrackID] = updateTrackers( ...
+            %     activeTrackers, dets, trajectories, processedFrames, ...
+            %     nextTrackID, MAX_DISTANCE, MAX_MISSES, MIN_TRAJ_LENGTH, MIN_NET_MOTION);
+
+            % changed from above since kalman needs actual frame numbers
             [activeTrackers, trajectories, nextTrackID] = updateTrackers( ...
-                activeTrackers, dets, trajectories, processedFrames, ...
-                nextTrackID, MAX_DISTANCE, MAX_MISSES, MIN_TRAJ_LENGTH, MIN_NET_MOTION);
+            activeTrackers, dets, trajectories, rawFrameCount, ...
+            nextTrackID, MAX_DISTANCE, MAX_MISSES, MIN_TRAJ_LENGTH, MIN_NET_MOTION, ...
+            yoloConfig.trackingMethod);
 
             updateDisplay(displayAxes, frame, activeTrackers, ...
                           processedFrames, length(trajectories), totalDetections);
@@ -141,6 +147,7 @@ function cfg = applyDefaults(cfg)
     if ~isfield(cfg, 'frameSample'),         cfg.frameSample         = 1;     end
     if ~isfield(cfg, 'imgSize'),             cfg.imgSize             = 1280;  end
     if ~isfield(cfg, 'classId'),             cfg.classId             = 0;     end
+    if ~isfield(cfg, 'trackingMethod'),      cfg.trackingMethod = 'nearest';  end
 end
 
 
@@ -375,20 +382,41 @@ end
 %% TRACKING
 %% =========================================================================
 
+% function [trackers, trajs, nextID] = updateTrackers( ...
+%         trackers, dets, trajs, frameNum, nextID, maxDist, maxMiss, minLen, minMotion)
+
 function [trackers, trajs, nextID] = updateTrackers( ...
-        trackers, dets, trajs, frameNum, nextID, maxDist, maxMiss, minLen, minMotion)
+        trackers, dets, trajs, frameNum, nextID, maxDist, maxMiss, minLen, minMotion, method)
 
     nD = numel(dets);
 
     if isempty(trackers)
         for i = 1:nD
-            trackers = [trackers, makeTrack(nextID, dets(i).Centroid, frameNum)]; %#ok<AGROW>
+            trackers = [trackers, makeTrack(nextID, dets(i).Centroid, frameNum, method)]; %#ok<AGROW>
             nextID   = nextID + 1;
         end
         return;
     end
 
     nT = length(trackers);
+
+    %predicts the position fo every active bee before matching detections
+    predictedPositions = zeros(nT, 2);
+    for i = 1:nT
+        if strcmp(method,'kalman')
+            %use kalman to predict next pos
+            [trackers(i).kf, result] = kalmanBeeFilter('predict', ...
+                trackers(i).kf, frameNum);
+            predictedPositions(i,:) = result.position;
+        else
+            %original nearest beighbor uses last known position
+
+            predictedPositions(i,:) = trackers(i).positions(end, 1:2);
+
+        end
+    end
+
+
     if nD == 0
         for i = 1:nT
             trackers(i).misses = trackers(i).misses + 1;
@@ -396,7 +424,8 @@ function [trackers, trajs, nextID] = updateTrackers( ...
     else
         assigned = false(nD,1);
         for i = 1:nT
-            lastPos = trackers(i).positions(end, 1:2);
+            %lastPos = trackers(i).positions(end, 1:2);
+            lastPos = predictedPositions(i,:); %kf implementation
             bestD = inf;  bestJ = -1;
             for j = 1:nD
                 if assigned(j), continue; end
@@ -409,13 +438,22 @@ function [trackers, trajs, nextID] = updateTrackers( ...
                 trackers(i).positions(end+1,:) = [dets(bestJ).Centroid, frameNum];
                 trackers(i).misses             = 0;
                 assigned(bestJ)                = true;
+
+                %update kalman filter using matched detection
+                %still saving YOLO coordinates, not kalman corrected ones
+                %this is intended to preserve trajectory data format and
+                %excel compatability
+                if strcmp(method, 'kalman')
+                    [trackers(i).kf, ~] = kalmanBeeFilter( ...
+                        'correct', trackers(i).kf, dets(bestJ).Centroid);
+                end
             else
                 trackers(i).misses = trackers(i).misses + 1;
             end
         end
         for j = 1:nD
             if ~assigned(j)
-                trackers = [trackers, makeTrack(nextID, dets(j).Centroid, frameNum)]; %#ok<AGROW>
+                trackers = [trackers, makeTrack(nextID, dets(j).Centroid, frameNum, method)]; %#ok<AGROW>
                 nextID   = nextID + 1;
             end
         end
@@ -434,10 +472,15 @@ function [trackers, trajs, nextID] = updateTrackers( ...
     trackers = trackers(keep);
 end
 
-function t = makeTrack(id, centroid, frameNum)
+function t = makeTrack(id, centroid, frameNum, method)
     t.id        = id;
     t.positions = [centroid, frameNum];
     t.misses    = 0;
+    t.kf        = []; % added for kalman filtering
+
+    if strcmp(method, 'kalman')
+        [t.kf, ~] = kalmanBeeFilter('init', [], centroid, frameNum);
+    end
 end
 
 

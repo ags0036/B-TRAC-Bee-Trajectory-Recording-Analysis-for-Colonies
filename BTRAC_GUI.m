@@ -37,7 +37,8 @@ function BTRAC_GUI()
     fig = uifigure('Name', 'B-TRAC - Bee Tracking System', ...
                    'Position', [100, 100, 1280, 860], ...
                    'Color', [0.95 0.95 0.95]);
-
+     %adding for user experience
+    fig.WindowState = 'maximized';
     %% Main layout
     mainGrid = uigridlayout(fig, [1, 2]);
     mainGrid.ColumnWidth = {'2x', '3x'};
@@ -50,6 +51,7 @@ function BTRAC_GUI()
     % Left grid - 25 rows
     leftGrid = uigridlayout(leftPanel, [26, 1]);
     leftGrid.RowHeight = repmat({'fit'}, 1, 26);
+    leftGrid.Scrollable = 'on';
     leftGrid.Padding = [16 16 16 16];
     leftGrid.RowSpacing = 5;
 
@@ -119,9 +121,11 @@ function BTRAC_GUI()
     % YOLO config panel — always visible
     yoloPanel = uipanel(leftGrid, 'Title', 'YOLO Configuration', ...
                         'BackgroundColor', [0.94 0.97 1.0], 'Visible', 'on');
-    yoloPanelGrid = uigridlayout(yoloPanel, [5, 2]);
+    %yoloPanelGrid = uigridlayout(yoloPanel, [5, 2]);
+    yoloPanelGrid = uigridlayout(yoloPanel, [6, 2]);
     yoloPanelGrid.ColumnWidth = {'2x', '3x'};
-    yoloPanelGrid.RowHeight = repmat({'fit'}, 1, 5);
+    %yoloPanelGrid.RowHeight = repmat({'fit'}, 1, 5);
+    yoloPanelGrid.RowHeight = repmat({'fit'}, 1, 6);
     yoloPanelGrid.Padding = [8 8 8 8];
     yoloPanelGrid.RowSpacing = 5;
 
@@ -149,6 +153,12 @@ function BTRAC_GUI()
     uibutton(yoloPanelGrid, 'Text', 'Auto-Detect Python', ...
              'BackgroundColor', [0.3 0.6 0.9], 'FontColor', 'white', ...
              'ButtonPushedFcn', @(~,~) autoDetectPython());
+    uilabel(yoloPanelGrid, 'Text', 'Tracking Method');
+    trackingDropdown = uidropdown(yoloPanelGrid, ...
+        'Items', {'Nearest-Neighbor', 'Kalman Filter'}, ...
+        'ItemsData', {'nearest', 'kalman'}, ...
+        'Value', 'nearest', ...
+        'Tooltip', 'Select the method used to associate bee detections');
 
 
 
@@ -204,7 +214,8 @@ function BTRAC_GUI()
 
     function addSession()
         d = uifigure('Name', 'Add Observation Session', ...
-                     'Position', [400, 300, 500, 420]);
+                     'Position', [400, 300, 500, 420], ...
+                     'WindowStyle', 'modal'); %added for usability
         dGrid = uigridlayout(d, [10, 2]);
         dGrid.ColumnWidth = {'1x', '2x'};
         dGrid.RowHeight = repmat({'fit'}, 1, 10);
@@ -365,6 +376,11 @@ function BTRAC_GUI()
         appData.yoloConfig.modelPath           = strtrim(modelPathField.Value);
         appData.yoloConfig.confidenceThreshold = confField.Value;
         appData.yoloConfig.frameSample         = frameSampleField.Value;
+        appData.yoloConfig.trackingMethod      = trackingDropdown.Value;
+
+        %troubleshooting
+        fprintf('[Tracking] Selected method: %s\n', ...
+            appData.yoloConfig.trackingMethod);
 
         lockUI(true);
         tag = 'YOLO';
@@ -396,10 +412,14 @@ function BTRAC_GUI()
 
                     [avgBearings, groupConfidences] = analyzeBearings( ...
                         angles, trajectoryIDs);
-
+                    
+                    %% B-TRAC II session data handling
                     appData.sessions(i).avgBearing = avgBearings;
                     appData.sessions(i).confidence = groupConfidences;
 
+                    %% B-TRAC I session data handling
+                    %% [appData.sessions(i).avgBearing, ...
+                    %% appData.sessions(i).confidence] = bearingAnalysis(angles);
                 else
 
                     appData.sessions(i).avgBearing = [];
@@ -581,7 +601,7 @@ end % BTRAC_GUI  <-- closes the main function; file-local functions follow
 %%  FILE-LOCAL UTILITY FUNCTIONS
 %%  These cannot see appData or GUI handles — they are pure utilities.
 %% ====================================================================
-
+%does this below get overwritten by GUI inputs?
 function cp = defaultCameraParams()
     cp.focalLength      = 1032;   % ~4mm lens / 6.2mm sensor * 1600px — reasonable default
     cp.focalLengthMm    = 4;      % physical focal length in mm (shown in GUI)
@@ -598,6 +618,7 @@ function yc = defaultYOLOConfig()
     yc.modelPath           = '';
     yc.confidenceThreshold = 0.25;
     yc.frameSample         = 1;
+    yc.trackingMethod      = 'nearest';
 end
 
 function [lat, lon] = parseGPSFile(filename)
