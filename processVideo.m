@@ -1,4 +1,4 @@
-function [trajectories, departureAngles] = processVideo(session, cameraParams, displayAxes, yoloConfig)
+function [trajectories, departureAngles, trajectoryIDs] = processVideo(session, cameraParams, displayAxes, yoloConfig)
 % processVideo  Process a single bee-tracking video session using YOLOv8.
 %
 %   Detection: YOLOv8 deep learning via bee_tracker_btrac.py
@@ -6,6 +6,7 @@ function [trajectories, departureAngles] = processVideo(session, cameraParams, d
 %              Requires Python + ultralytics + trained best.pt model.
     trajectories    = {};
     departureAngles = [];
+    trajectoryIDs   = [];
 
     if nargin < 4 || isempty(yoloConfig), yoloConfig = struct(); end
     yoloConfig = applyDefaults(yoloConfig);
@@ -113,7 +114,7 @@ function [trajectories, departureAngles] = processVideo(session, cameraParams, d
         fprintf('  Done: %.1fs | Dets: %d | Valid trajectories: %d\n', ...
                 toc, totalDetections, length(trajectories));
 
-        departureAngles = extractDepartureAngles(trajectories, cameraParams, MIN_NET_MOTION);
+        [departureAngles, trajectoryIDs] = extractDepartureAngles(trajectories, cameraParams, MIN_NET_MOTION);
         if ~isempty(departureAngles)
             fprintf('  Bearings: %d (mean %.1f deg, std %.1f deg)\n', ...
                     length(departureAngles), mean(departureAngles), std(departureAngles));
@@ -444,19 +445,38 @@ end
 %% BEARING EXTRACTION
 %% =========================================================================
 
-function angles = extractDepartureAngles(trajs, cameraParams, minMotion)
-    if isempty(trajs), angles = []; return; end
-    H      = cameraParams.compassHeading;
-    angles = nan(length(trajs),1);
+function [angles, trajectoryIDs] = extractDepartureAngles(trajs, cameraParams, minMotion)
+
+    angles = [];
+    trajectoryIDs = [];
+
+    if isempty(trajs)
+        return;
+    end
+
+    H = cameraParams.compassHeading;
+
     for i = 1:length(trajs)
+
         pos = trajs{i};
-        if size(pos,1) < 2, continue; end
+
+        if size(pos,1) < 2
+            continue;
+        end
+
         dx = pos(end,1) - pos(1,1);
         dy = pos(end,2) - pos(1,2);
-        if norm([dx,dy]) < minMotion, continue; end
-        angles(i) = mod(H + atan2(dx,-dy)*(180/pi) + 360, 360);
+
+        if norm([dx,dy]) < minMotion
+            continue;
+        end
+
+        angle = mod(H + atan2(dx,-dy)*(180/pi) + 360, 360);
+
+        angles(end+1,1) = angle;
+        trajectoryIDs(end+1,1) = i;
+
     end
-    angles = angles(~isnan(angles));
 end
 
 

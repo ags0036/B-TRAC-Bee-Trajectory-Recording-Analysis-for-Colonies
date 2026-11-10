@@ -17,8 +17,7 @@ function BTRAC_GUI()
     %  "DEFINE" FLAGS  —  edit the two lines below                        %
     TEST_MODE     = false;          % true  = skip GUI, show synthetic plots
     TEST_SCENARIO = 'beeline';      % 'beeline' | 'scatter' | 'long_range' | 'close_range'
-    NO_BEARINGANALYSIS = true;      % set to true to skip bearing analysis, this is customer requirement, as traingulation methods need to be reworkered.
-    % ------------------------------------------------------------------ %
+    NO_BEARINGANALYSIS = false;      % set to true to skip bearing clustering
 
     if TEST_MODE
         runTestMode(TEST_SCENARIO);
@@ -295,6 +294,16 @@ function BTRAC_GUI()
             ns.compassBearing = compassBearingField.Value;
             ns.date           = dateField.Value;
             ns.notes          = notesField.Value;
+
+            % Trajectory and bearing analysis results 
+            ns.trajectories     = {};
+            ns.departureAngles  = [];
+            ns.trajectoryIDs    = [];
+
+            % One value per detected bearing group
+            ns.avgBearing   = [];
+            ns.confidence   = [];
+            
             ns.processed      = false;
             if isempty(appData.sessions)
                 appData.sessions = ns;
@@ -370,23 +379,34 @@ function BTRAC_GUI()
                 sessionCameraParams = appData.cameraParams;
                 sessionCameraParams.compassHeading = appData.sessions(i).compassBearing;
 
-                [trajs, angles] = processVideo(appData.sessions(i), ...
-                                               sessionCameraParams, ...
-                                               resultsAxes, ...
-                                               appData.yoloConfig);
+                [trajs, angles, trajectoryIDs] = processVideo(appData.sessions(i), ...
+                                             sessionCameraParams, ...
+                                             resultsAxes, ...
+                                             appData.yoloConfig);
 
                 appData.sessions(i).trajectories    = trajs;
                 appData.sessions(i).departureAngles = angles;
                 appData.sessions(i).processed       = true;
+                appData.sessions(i).trajectoryIDs = trajectoryIDs;
 
                 % ── Bearing analysis — skipped when NO_BEARINGANALYSIS = true ──
+                % ── Group individual trajectory bearings ──
+                % Group individual trajectory bearings
                 if ~NO_BEARINGANALYSIS
-                    [appData.sessions(i).avgBearing, ...
-                     appData.sessions(i).confidence] = analyzeBearings(angles);
+
+                    [avgBearings, groupConfidences] = analyzeBearings( ...
+                        angles, trajectoryIDs);
+
+                    appData.sessions(i).avgBearing = avgBearings;
+                    appData.sessions(i).confidence = groupConfidences;
+
                 else
-                    appData.sessions(i).avgBearing = NaN;
-                    appData.sessions(i).confidence = NaN;
+
+                    appData.sessions(i).avgBearing = [];
+                    appData.sessions(i).confidence = [];
+
                 end
+
                 refreshSessionList();
             end
 
@@ -394,23 +414,40 @@ function BTRAC_GUI()
             drawnow;
 
             % ── Post-processing — skipped when NO_BEARINGANALYSIS = true ──────
-            if ~NO_BEARINGANALYSIS
-                setStatus('Triangulating hive location...');
-                done = appData.sessions([appData.sessions.processed]);
-                if length(done) >= 2
-                    hive = triangulateHive(done);
-                    appData.results.estimatedHiveLocation = hive;
-                    createMapVisualization(done, hive, resultsAxes);
-                    setStatus(sprintf('Done! Hive approx [%.6f, %.6f]', hive(1), hive(2)));
-                else
-                    showSingleResult(done(1));
-                    setStatus('Done (single session - add more for triangulation).');
-                end
-            else
-                setStatus(sprintf('Done. Bearing analysis skipped (NO_BEARINGANALYSIS=true). %d session(s) processed.', ...
-                          length(appData.sessions)));
-                fprintf('  [BTRAC] Bearing analysis disabled — set NO_BEARINGANALYSIS=false to enable.\n');
-            end
+            % ── Post-processing: display grouped bearing results ──
+
+done = appData.sessions([appData.sessions.processed]);
+
+if ~NO_BEARINGANALYSIS
+
+    if ~isempty(done)
+
+        % Display the grouped bearings from the most recently processed session
+        showGroupedResult(done(end));
+
+        totalGroups = 0;
+
+        for k = 1:length(done)
+            totalGroups = totalGroups + length(done(k).avgBearing);
+        end
+
+        setStatus(sprintf( ...
+            'Done. %d session(s) processed; %d bearing group(s) identified.', ...
+            length(done), totalGroups));
+
+    else
+
+        setStatus('Processing complete, but no sessions were processed.');
+
+    end
+
+else
+
+    setStatus(sprintf( ...
+        'Done. Bearing analysis skipped. %d session(s) processed.', ...
+        length(done)));
+
+end
 
             exportBtn.Enable = 'on';
 
@@ -484,6 +521,58 @@ function BTRAC_GUI()
         xlim(resultsAxes, [0 360]);
         grid(resultsAxes, 'on');
     end
+
+function showGroupedResult(sess)
+
+    angles = sess.departureAngles;
+    groupBearings = sess.avgBearing;
+    groupConfidences = sess.confidence;
+
+    cla(resultsAxes);
+
+    if isempty(angles)
+
+        text(resultsAxes, 0.5, 0.5, 'No departures detected.', ...
+             'HorizontalAlignment', 'center', ...
+             'Units', 'normalized', ...
+             'FontSize', 14);
+
+        return;
+
+    end
+
+    % Plot individual trajectory bearings
+    histogram(resultsAxes, angles, 36, ...
+              'FaceColor', [0.3 0.7 0.3], ...
+              'EdgeColor', 'k');
+
+    hold(resultsAxes, 'on');
+
+    % Mark average bearing and display confidence for each group
+    for g = 1:length(groupBearings)
+
+        xline(resultsAxes, groupBearings(g), '--', ...
+              sprintf('Group %d: %.1f deg | Conf: %.3f', ...
+              g, groupBearings(g), groupConfidences(g)), ...
+              'LineWidth', 1.5, ...
+              'LabelVerticalAlignment', 'middle');
+
+    end
+
+    hold(resultsAxes, 'off');
+
+    xlabel(resultsAxes, 'Bearing (degrees from North)');
+    ylabel(resultsAxes, 'Number of trajectories');
+
+    title(resultsAxes, ...
+          sprintf('%s - Grouped Departure Bearings (n=%d, groups=%d)', ...
+          sess.name, length(angles), length(groupBearings)), ...
+          'FontSize', 12, 'FontWeight', 'bold');
+
+    xlim(resultsAxes, [0 360]);
+    grid(resultsAxes, 'on');
+
+end
 
 end % BTRAC_GUI  <-- closes the main function; file-local functions follow
 
