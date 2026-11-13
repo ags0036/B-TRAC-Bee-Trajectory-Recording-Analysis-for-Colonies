@@ -1,186 +1,357 @@
-%added so visible on path
-
-function createMapVisualization(sessions, hive, ax)
-% Draw the full map:
-%   - Bearing rays from each observation point (unit direction vectors)
-%   - Pairwise intersection points of all rays
-%   - Least-squares best-fit hive location
-%   - Observation point markers with session labels
+function createMapVisualization(sessions, candidates, ax)
+% Create Map Visualization
+% Displays observation stations, directional bearing groups,
+% supporting rays, and predicted hive candidates.
 %
-% Local ENU coordinate system centred on the map centroid.
+% Thin gray lines  = All directional bearing groups
+% Thick green lines = Rays supporting a hive candidate
+% Blue circles     = Observation stations
+% Green pentagons  = Predicted hive candidates
+% Candidate labels use offset callouts so they do not cover intersections.
 
-    nObs    = length(sessions);
-    obsLats = arrayfun(@(s) s.gpsCoords(1), sessions);
-    obsLons = arrayfun(@(s) s.gpsCoords(2), sessions);
-    brgs    = arrayfun(@(s) s.avgBearing,   sessions);
-    confs   = arrayfun(@(s) s.confidence,   sessions);
-
-    % Common ENU origin = centroid of all points including hive
-    cLat = mean([obsLats, hive(1)]);
-    cLon = mean([obsLons, hive(2)]);
-
-    [obsX, obsY]   = ll2xy(obsLats, obsLons, cLat, cLon);
-    [hiveX, hiveY] = ll2xy(hive(1), hive(2), cLat, cLon);
-
-    cla(ax);  hold(ax, 'on');
-    setAxesBounds(ax, [obsX, hiveX], [obsY, hiveY]);
-
-    RAY_LEN = 5000;  % metres - length of drawn bearing rays
-
-    % ── 1. Bearing rays (r_i(t) = p_i + t*v_i) ──────────────────────────
-    % Store endpoints for intersection calculation
-    rayEnds = zeros(nObs, 2);
-    for i = 1:nObs
-        % Unit direction vector: v = [sin(beta), cos(beta)]
-        v      = [sind(brgs(i)), cosd(brgs(i))];
-        endPt  = [obsX(i), obsY(i)] + RAY_LEN * v;
-        rayEnds(i,:) = endPt;
-
-        col = confColor(confs(i));
-        lw  = 1.5 + 2 * confs(i);
-        plot(ax, [obsX(i), endPt(1)], [obsY(i), endPt(2)], ...
-             '-', 'Color', col, 'LineWidth', lw);
-        drawArrow(ax, obsX(i), obsY(i), endPt(1), endPt(2), col, 40);
+    %% Validate inputs
+    if nargin < 3 || isempty(ax) || ~isvalid(ax)
+        error('createMapVisualization:InvalidAxes', ...
+            'A valid UIAxes handle must be supplied.');
     end
 
-    % ── 2. Pairwise intersections (all ray pairs) ──────────────────────
-    % Line i: p = P_i + t * v_i
-    % Solve: [v_i, -v_j] * [t; u] = P_j - P_i  (2x2 linear system)
-    EPS_PARALLEL = 1e-10;
-    intersections = [];
-    for i = 1:nObs
-        for j = i+1:nObs
-            p1 = [obsX(i); obsY(i)];
-            p2 = [obsX(j); obsY(j)];
-            v1 = [sind(brgs(i)); cosd(brgs(i))];
-            v2 = [sind(brgs(j)); cosd(brgs(j))];
+    if isempty(sessions)
+        cla(ax);
+        title(ax, 'No observation sessions to display');
+        return;
+    end
 
-            Amat = [v1, -v2];
-            detA = det(Amat);
-            if abs(detA) < EPS_PARALLEL, continue; end  % near-parallel rays
+    if nargin < 2 || isempty(candidates)
+        candidates = struct([]);
+    end
 
-            tu   = Amat \ (p2 - p1);
-            t    = tu(1);
-            if t < 0, continue; end   % intersection behind observation point
+    %% Get observation and candidate coordinates
+    obsLats = arrayfun(@(s) s.gpsCoords(1), sessions);
+    obsLons = arrayfun(@(s) s.gpsCoords(2), sessions);
 
-            pInt = p1 + t * v1;
-            intersections(end+1, :) = pInt'; %#ok<AGROW>
+    if isempty(candidates)
+        candLats = [];
+        candLons = [];
+    else
+        candLats = [candidates.lat];
+        candLons = [candidates.lon];
+    end
+
+    %% Convert GPS to local East/North coordinates
+    refLat = mean(obsLats);
+    refLon = mean(obsLons);
+    [obsE, obsN] = ll2xy(obsLats, obsLons, refLat, refLon);
+    [candE, candN] = ll2xy(candLats, candLons, refLat, refLon);
+
+    %% Prepare plot
+    cla(ax);
+    hold(ax, 'on');
+
+    ax.Color = [0.975 0.978 0.982];
+    ax.XColor = [0.22 0.25 0.28];
+    ax.YColor = [0.22 0.25 0.28];
+    ax.GridColor = [0.62 0.66 0.71];
+    ax.GridAlpha = 0.30;
+    ax.MinorGridColor = [0.78 0.81 0.84];
+    ax.MinorGridAlpha = 0.20;
+    ax.FontName = 'Arial';
+    ax.FontSize = 9;
+    ax.LineWidth = 1;
+    ax.Box = 'on';
+
+    %% Visualization settings
+    % Extend rays far enough to reach all estimated hive candidates
+    if isempty(candE)
+        rayLength = 2000;
+    else
+        candidateDistances = hypot( ...
+            candE(:)' - obsE(:), ...
+            candN(:)' - obsN(:));
+
+        rayLength = max(candidateDistances(:)) + 300;
+    end
+
+    allRayColor = [0.62 0.65 0.68];
+    supportRayColor = [0.10 0.58 0.28];
+    stationColor = [0.12 0.35 0.78];
+    candidateColor = [0.10 0.58 0.28];
+
+    hAllRays = gobjects(1);
+    hSupportRays = gobjects(1);
+    hStations = gobjects(1);
+    hCandidate = gobjects(1);
+
+    %% Draw all directional bearing rays
+    allX = [obsE(:); candE(:)];
+    allY = [obsN(:); candN(:)];
+
+    for s = 1:numel(sessions)
+        bearings = sessions(s).avgBearing;
+
+        for g = 1:numel(bearings)
+            bearing = bearings(g);
+            if ~isfinite(bearing)
+                continue;
+            end
+
+            v = [sind(bearing), cosd(bearing)];
+            endpoint = [obsE(s), obsN(s)] + rayLength * v;
+
+            h = plot(ax, [obsE(s), endpoint(1)], ...
+                [obsN(s), endpoint(2)], '-', ...
+                'Color', allRayColor, 'LineWidth', 1.25, ...
+                'HandleVisibility', 'off');
+
+            if ~isgraphics(hAllRays)
+                hAllRays = h;
+            end
+
+            arrowLength = 35;
+            arrowStart = endpoint - arrowLength * v;
+            quiver(ax, arrowStart(1), arrowStart(2), ...
+                arrowLength*v(1), arrowLength*v(2), 0, ...
+                'Color', allRayColor, 'LineWidth', 1.2, ...
+                'MaxHeadSize', 1.8, 'HandleVisibility', 'off');
+
+            allX(end+1,1) = endpoint(1); %#ok<AGROW>
+            allY(end+1,1) = endpoint(2); %#ok<AGROW>
         end
     end
 
-    if ~isempty(intersections)
-        plot(ax, intersections(:,1), intersections(:,2), 'bx', ...
-             'MarkerSize', 10, 'LineWidth', 2, 'DisplayName', 'Ray Intersections');
+    %% Highlight rays supporting each hive candidate
+    for c = 1:numel(candidates)
+        hasSupportIDs = ...
+            isfield(candidates, 'supportRaySessions') && ...
+            isfield(candidates, 'supportRayGroups') && ...
+            ~isempty(candidates(c).supportRaySessions) && ...
+            ~isempty(candidates(c).supportRayGroups);
+
+        if ~hasSupportIDs
+            continue;
+        end
+
+        supportSessions = candidates(c).supportRaySessions;
+        supportGroups = candidates(c).supportRayGroups;
+
+        for k = 1:numel(supportSessions)
+            s = supportSessions(k);
+            g = supportGroups(k);
+
+            if ~isfinite(s) || ~isfinite(g) || ...
+                    s ~= fix(s) || g ~= fix(g) || ...
+                    s < 1 || s > numel(sessions) || ...
+                    g < 1 || g > numel(sessions(s).avgBearing)
+                continue;
+            end
+
+            bearing = sessions(s).avgBearing(g);
+            if ~isfinite(bearing)
+                continue;
+            end
+
+            v = [sind(bearing), cosd(bearing)];
+            endpoint = [obsE(s), obsN(s)] + rayLength * v;
+
+            h = plot(ax, [obsE(s), endpoint(1)], ...
+                [obsN(s), endpoint(2)], '-', ...
+                'Color', supportRayColor, 'LineWidth', 3.0, ...
+                'HandleVisibility', 'off');
+
+            if ~isgraphics(hSupportRays)
+                hSupportRays = h;
+            end
+        end
     end
 
-    % ── 3. Observation point markers ──────────────────────────────────
-    for i = 1:nObs
-        plot(ax, obsX(i), obsY(i), 'o', 'MarkerSize', 12, ...
-             'MarkerFaceColor', [0.2 0.4 0.8], 'MarkerEdgeColor', 'white', 'LineWidth', 2);
-        text(ax, obsX(i)+30, obsY(i)+30, sessions(i).name, ...
-             'FontSize', 10, 'FontWeight', 'bold', 'BackgroundColor', [1 1 1 0.7]);
+    %% Draw observation stations
+    for s = 1:numel(sessions)
+        h = plot(ax, obsE(s), obsN(s), 'o', ...
+            'MarkerSize', 8, 'MarkerFaceColor', stationColor, ...
+            'MarkerEdgeColor', [0.12 0.14 0.18], ...
+            'LineWidth', 1.2, 'HandleVisibility', 'off');
+
+        if ~isgraphics(hStations)
+            hStations = h;
+        end
+
+        if isfield(sessions, 'name') && ~isempty(sessions(s).name)
+            stationName = char(sessions(s).name);
+        else
+            stationName = sprintf('Station %d', s);
+        end
+
+        % Small station label, offset from the station marker
+        text(ax, obsE(s)+18, obsN(s)+18, stationName, ...
+            'FontSize', 8, 'FontWeight', 'bold', ...
+            'Color', stationColor, 'BackgroundColor', [1 1 1 0.88], ...
+            'Margin', 2, 'Interpreter', 'none', 'Clipping', 'on');
     end
 
-    % ── 4. Best-fit hive (p*) ─────────────────────────────────────────
-    plot(ax, hiveX, hiveY, 'p', 'MarkerSize', 28, ...
-         'MarkerFaceColor', [0.2 0.8 0.2], 'MarkerEdgeColor', 'black', 'LineWidth', 2);
-    text(ax, hiveX+40, hiveY+40, sprintf('Best-fit Hive\n%.6f, %.6f', hive(1), hive(2)), ...
-         'FontSize', 11, 'FontWeight', 'bold', 'Color', [0 0.5 0], ...
-         'BackgroundColor', [1 1 1 0.85]);
+    %% Establish plot limits and a readable coordinate grid
+    spanX = max(allX) - min(allX);
+    spanY = max(allY) - min(allY);
+    if spanX < 1, spanX = 250; end
+    if spanY < 1, spanY = 250; end
 
-    % ── Axis formatting ───────────────────────────────────────────────
-    axis(ax, 'equal');  grid(ax, 'on');
-    xlabel(ax, 'East (m)',  'FontWeight', 'bold');
-    ylabel(ax, 'North (m)', 'FontWeight', 'bold');
-    title(ax, sprintf('B-TRAC: Estimated Hive Location [%.6f, %.6f]', hive(1), hive(2)), ...
-          'FontSize', 12, 'FontWeight', 'bold');
+    padX = max(100, 0.12 * spanX);
+    padY = max(100, 0.12 * spanY);
 
-    % Legend
-    legend(ax, {'Bearing Ray','','Pairwise Intersection','Observation Point','','Best-fit Hive'}, ...
-           'Location', 'bestoutside', 'FontSize', 9);
+    % Reserve room around candidate points for their labels
+    labelOffset = max(80, 0.10 * max(spanX, spanY));
+    if ~isempty(candE)
+        calloutX = candE(:) + labelOffset;
+        calloutY = candN(:) + labelOffset;
+        allX = [allX; calloutX];
+        allY = [allY; calloutY];
+    end
 
-    addScaleBar(ax);
-    addCompassRose(ax);
+    xLimits = [min(allX)-padX, max(allX)+padX];
+    yLimits = [min(allY)-padY, max(allY)+padY];
+    xlim(ax, xLimits);
+    ylim(ax, yLimits);
+    axis(ax, 'equal');
+
+    grid(ax, 'on');
+    ax.XMinorGrid = 'on';
+    ax.YMinorGrid = 'on';
+    ax.GridLineStyle = '-';
+    ax.MinorGridLineStyle = ':';
+    ax.Layer = 'bottom';
+
+    %% Point to hive candidates with offset arrow 
+    for c = 1:numel(candidates)
+        h = plot(ax, candE(c), candN(c), 'p', ...
+            'MarkerSize', 15, 'MarkerFaceColor', [1 0.8 0.15], ...
+            'MarkerEdgeColor', [0.65 0.45 0.05], ...
+            'LineWidth', 1.5, 'HandleVisibility', 'off');
+
+        if ~isgraphics(hCandidate)
+            hCandidate = h;
+        end
+
+        if isfield(candidates, 'meanConfidence')
+            confidencePercent = 100 * max(0, min(1, ...
+                candidates(c).meanConfidence));
+        else
+            confidencePercent = NaN;
+        end
+
+        if isfield(candidates, 'supportSessions')
+            supportSessionCount = candidates(c).supportSessions;
+        else
+            supportSessionCount = 0;
+        end
+
+        if isfield(candidates, 'supportRays')
+            supportRayCount = candidates(c).supportRays;
+        else
+            supportRayCount = 0;
+        end
+
+        label = sprintf('Hive %d\nConfidence: %.1f%%\nStations: %d | Rays: %d\nGPS: %.6f, %.6f', ...
+            c, confidencePercent, supportSessionCount, supportRayCount, ...
+            candidates(c).lat, candidates(c).lon);
+
+        % Stagger callouts to reduce overlap when several candidates are
+        % close together
+        directions = [1 1; -1 1; 1 -1; -1 -1];
+        direction = directions(mod(c-1, size(directions,1))+1,:);
+        dx = direction(1) * labelOffset;
+        dy = direction(2) * labelOffset;
+
+        labelX = candE(c) + dx;
+        labelY = candN(c) + dy;
+
+        % Leader line and arrowhead connect the hive marker to its label
+        plot(ax, [candE(c), labelX], [candN(c), labelY], ...
+            '-', 'Color', candidateColor, 'LineWidth', 1.1, ...
+            'HandleVisibility', 'off');
+
+        % Arrowhead at the candidate end of the leader line.
+        quiver(ax, labelX, labelY, -0.78*dx, -0.78*dy, 0, ...
+            'Color', [1.0 0.80 0.15], 'LineWidth', 1.6, ...
+            'MaxHeadSize', 1.2, 'HandleVisibility', 'off');
+
+        horizontalAlignment = 'left';
+        if dx < 0
+            horizontalAlignment = 'right';
+        end
+
+        verticalAlignment = 'bottom';
+        if dy < 0
+            verticalAlignment = 'top';
+        end
+
+        text(ax, labelX, labelY, label, ...
+            'FontSize', 7.5, 'FontWeight', 'bold', ...
+            'Color', [0.12 0.12 0.12], ...
+            'BackgroundColor', [1 1 1 0.94], ...
+            'EdgeColor', [0.58 0.63 0.60], ...
+            'LineWidth', 0.8, 'Margin', 4, ...
+            'HorizontalAlignment', horizontalAlignment, ...
+            'VerticalAlignment', verticalAlignment, ...
+            'Interpreter', 'none', 'Clipping', 'on');
+    end
+
+    %% Labels and title
+    xlabel(ax, 'East (m)', 'FontWeight', 'bold', ...
+        'Color', [1 1 1]);
+    ylabel(ax, 'North (m)', 'FontWeight', 'bold', ... 
+        'Color', [1 1 1]);
+
+    if isempty(candidates)
+        title(ax, ...
+            'B-TRAC II | Observation Stations and Bearing Directions', ...
+            'FontWeight', 'bold');
+    else
+        title(ax, sprintf('B-TRAC II | %d Hive Candidate(s)', ...
+            numel(candidates)), 'FontWeight', 'bold');
+    end
+
+    %% North indicator
+    text(ax, 0.965, 0.94, 'N', 'Units', 'normalized', ...
+        'HorizontalAlignment', 'center', 'FontSize', 10, ...
+        'FontWeight', 'bold', 'Color', [1 1 1], ...
+        'Interpreter', 'none');
+
+    text(ax, 0.965, 0.895, '^', 'Units', 'normalized', ...
+        'HorizontalAlignment', 'center', 'FontSize', 14, ...
+        'FontWeight', 'bold', 'Color', [1 1 1], ...
+        'Interpreter', 'none');
+
+    %% Legend
+    legendHandles = gobjects(0);
+    legendNames = {};
+
+    if isgraphics(hAllRays)
+        legendHandles(end+1) = hAllRays;
+        legendNames{end+1} = 'Directional bearing groups';
+    end
+    if isgraphics(hSupportRays)
+        legendHandles(end+1) = hSupportRays;
+        legendNames{end+1} = 'Supporting bearing rays';
+    end
+    if isgraphics(hStations)
+        legendHandles(end+1) = hStations;
+        legendNames{end+1} = 'Observation stations';
+    end
+    if isgraphics(hCandidate)
+        legendHandles(end+1) = hCandidate;
+        legendNames{end+1} = 'Hive candidate';
+    end
+
+    if ~isempty(legendHandles)
+        legend(ax, legendHandles, legendNames, ...
+            'Location', 'northwest', 'Box', 'off', 'FontSize', 8);
+    end
+
     hold(ax, 'off');
 end
 
-function [E, N] = ll2xy(lat, lon, rLat, rLon)
-% Convert lat/lon (degrees) to local ENU metres.
-%   E = R * (lambda - lambda_0) * cos(phi_0)
-%   N = R * (phi - phi_0)
-    R = 6378137;   % WGS84 semi-major axis (metres)
-    E = R * deg2rad(lon  - rLon) * cosd(rLat);
-    N = R * deg2rad(lat  - rLat);
-end
 
-function [lat, lon] = xy2ll(E, N, rLat, rLon)
-    R   = 6378137;
-    lat = rLat + rad2deg(N / R);
-    lon = rLon + rad2deg(E / (R * cosd(rLat)));
-end
-
-function setAxesBounds(ax, xs, ys)
-    xr = max(xs) - min(xs);  yr = max(ys) - min(ys);
-    if xr < 1, xr = 500; end
-    if yr < 1, yr = 500; end
-    p = 0.25;
-    xlim(ax, [min(xs)-p*xr,  max(xs)+p*xr]);
-    ylim(ax, [min(ys)-p*yr,  max(ys)+p*yr]);
-    ax.Color     = [0.97 0.97 0.97];
-    ax.GridColor = [0.80 0.80 0.80];
-    ax.GridAlpha = 0.5;
-end
-
-function col = confColor(c)
-    % Red (low) -> Yellow -> Green (high confidence)
-    if c < 0.5, col = [1, 2*c, 0]; else, col = [2*(1-c), 1, 0]; end
-end
-
-function drawArrow(ax, x1, y1, x2, y2, col, sz)
-    ang = atan2(y2-y1, x2-x1);  a = 25*pi/180;
-    lx = x2 - sz*cos(ang-a);  ly = y2 - sz*sin(ang-a);
-    rx = x2 - sz*cos(ang+a);  ry = y2 - sz*sin(ang+a);
-    patch(ax, [x2,lx,rx], [y2,ly,ry], col, 'EdgeColor', col, 'LineWidth', 1.5);
-end
-
-function drawCircle(ax, cx, cy, r, col)
-    t = linspace(0, 2*pi, 60);
-    plot(ax, cx + r*cos(t), cy + r*sin(t), '--', 'Color', col, 'LineWidth', 1.5);
-end
-
-function addScaleBar(ax)
-    xl = xlim(ax);  yl = ylim(ax);
-    % Pick a round scale bar length (~10% of plot width)
-    rawLen = 0.10 * (xl(2) - xl(1));
-    mag    = 10^floor(log10(rawLen));
-    barLen = round(rawLen / mag) * mag;
-
-    bx = xl(1) + 0.04*(xl(2)-xl(1));
-    by = yl(1) + 0.04*(yl(2)-yl(1));
-    plot(ax, [bx, bx+barLen], [by, by], 'k-', 'LineWidth', 3);
-    if barLen >= 1000
-        label = sprintf('%.0f km', barLen/1000);
-    else
-        label = sprintf('%.0f m', barLen);
-    end
-    text(ax, bx+barLen/2, by - 0.02*(yl(2)-yl(1)), label, ...
-         'FontSize', 9, 'FontWeight', 'bold', ...
-         'HorizontalAlignment', 'center', 'BackgroundColor', [1 1 1 0.8]);
-end
-
-function addCompassRose(ax)
-    xl = xlim(ax);  yl = ylim(ax);
-    rx  = xl(2) - 0.10*(xl(2)-xl(1));
-    ry  = yl(2) - 0.13*(yl(2)-yl(1));
-    sz  = 0.06*(yl(2)-yl(1));
-
-    plot(ax, [rx,rx], [ry, ry+sz], 'k-', 'LineWidth', 2);
-    patch(ax, [rx, rx-sz/4, rx+sz/4], [ry+sz, ry+sz-sz/3, ry+sz-sz/3], 'k');
-    text(ax, rx, ry+sz+sz/3, 'N', 'FontSize', 11, 'FontWeight', 'bold', ...
-         'HorizontalAlignment', 'center', 'BackgroundColor', [1 1 1 0.8]);
-    plot(ax, [rx-sz/2, rx+sz/2], [ry, ry], 'k-', 'LineWidth', 1);
-    text(ax, rx+sz/2+sz/4, ry, 'E', 'FontSize', 9, 'FontWeight', 'bold', ...
-         'BackgroundColor', [1 1 1 0.8]);
-    text(ax, rx-sz/2-sz/4, ry, 'W', 'FontSize', 9, 'FontWeight', 'bold', ...
-         'BackgroundColor', [1 1 1 0.8]);
+%% Helper function: GPS to local East/North coordinates
+function [E, N] = ll2xy(lat, lon, refLat, refLon)
+    R = 6378137;
+    E = R .* deg2rad(lon - refLon) .* cosd(refLat);
+    N = R .* deg2rad(lat - refLat);
 end
