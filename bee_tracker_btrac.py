@@ -19,6 +19,15 @@ import argparse
 import csv
 import io
 from pathlib import Path
+import torch
+
+# Check for GPU
+if torch.cuda.is_available():
+    device = 0
+    print(f"Using GPU: {torch.cuda.get_device_name(0)}")
+else:
+    device = "cpu"
+    print("No CUDA GPU available. Using CPU.")
 
 # Force UTF-8 on Windows consoles
 if hasattr(sys.stdout, 'buffer'):
@@ -124,7 +133,8 @@ def main():
                 iou=0.45,
                 imgsz=args.imgsz,
                 classes=[args.class_id],
-                verbose=False
+                verbose=False,
+                device=device
             )
 
             result = results[0]
