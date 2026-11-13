@@ -4,13 +4,8 @@ function BTRAC_GUI()
 %   Requires (same folder or on MATLAB path):
 %     processVideo.m                   - video processing & tracking
 %     bearingAnalysis.m                - circular stats, triangulation, map, export
-%     bee_tracker_btrac.py            - YOLO Python script
+%     bee_tracker_btrac.py             - YOLO Python script
 %
-%  TEST_SCENARIO options:
-%    'beeline'    - 3 stations, bees heading to one hive (clean demo)
-%    'scatter'    - 4 stations, 25 deg noise (realistic messy data)
-%    'long_range' - 4 stations spread ~2 km apart
-%    'close_range'- 3 stations within 200 m (backyard scenario)
 % =========================================================================
 
     % ------------------------------------------------------------------ %
@@ -31,7 +26,9 @@ function BTRAC_GUI()
     appData.sessions     = [];
     appData.cameraParams = defaultCameraParams();
     appData.yoloConfig   = defaultYOLOConfig();
-    appData.results      = struct('estimatedHiveLocation', []);
+    appData.results      = struct('estimatedHiveLocation', [], ...
+                              'hiveCandidates', [], ...
+                              'triangulationDiagnostics', []);
 
     %% Figure
     fig = uifigure('Name', 'B-TRAC - Bee Tracking System', ...
@@ -49,8 +46,8 @@ function BTRAC_GUI()
                          'BackgroundColor', 'white');
 
     % Left grid - 25 rows
-    leftGrid = uigridlayout(leftPanel, [26, 1]);
-    leftGrid.RowHeight = repmat({'fit'}, 1, 26);
+    leftGrid = uigridlayout(leftPanel, [27, 1]);
+    leftGrid.RowHeight = repmat({'fit'}, 1, 27);
     leftGrid.Scrollable = 'on';
     leftGrid.Padding = [16 16 16 16];
     leftGrid.RowSpacing = 5;
@@ -168,6 +165,11 @@ function BTRAC_GUI()
                           'FontSize', 14, 'FontWeight', 'bold', ...
                           'BackgroundColor', [0.2 0.4 0.8], 'FontColor', 'white', ...
                           'ButtonPushedFcn', @(~,~) processAllSessions());
+    refreshVisualizationBtn = uibutton(leftGrid, 'Text', 'Refresh Visualization', ...
+        'FontSize', 12, 'BackgroundColor', [0.35 0.55 0.65], ...
+        'FontColor', 'white', 'Enable', 'off', ...
+        'Tooltip', 'Recalculate candidate locations from already processed sessions; does not rerun YOLO.', ...
+        'ButtonPushedFcn', @(~,~) refreshVisualization());
     progressBar = uigauge(leftGrid, 'linear', 'Limits', [0 100], 'Value', 0);
     statusLabel = uilabel(leftGrid, 'Text', 'Ready', ...
                           'FontSize', 11, 'HorizontalAlignment', 'center', ...
@@ -314,6 +316,8 @@ function BTRAC_GUI()
             % One value per detected bearing group
             ns.avgBearing   = [];
             ns.confidence   = [];
+            ns.groupIDs     = {};
+            ns.referenceBearings = [];
             
             ns.processed      = false;
             if isempty(appData.sessions)
@@ -329,10 +333,14 @@ function BTRAC_GUI()
 
     function removeSession()
         idx = sessionListBox.Value;
+
         if isempty(idx)
-            uialert(fig, 'Select a session first.', 'Warning', 'Icon', 'warning'); return;
+            uialert(fig, 'Select a session first.', 'Warning', 'Icon', 'warning');
+            return;
         end
-        i = find(strcmp(sessionListBox.Items, idx{1}));
+
+        i = find(strcmp(sessionListBox.Items, idx), 1);
+
         if ~isempty(i)
             appData.sessions(i) = [];
             refreshSessionList();
@@ -410,12 +418,20 @@ function BTRAC_GUI()
                 % Group individual trajectory bearings
                 if ~NO_BEARINGANALYSIS
 
-                    [avgBearings, groupConfidences] = analyzeBearings( ...
-                        angles, trajectoryIDs);
+                    [avgBearings, groupConfidences, groupIDs, referenceBearings] = ...
+                        bearingAnalysis(angles, trajectoryIDs);
+                    fprintf('\n--- Session %d: %s ---\n', i, appData.sessions(i).name);
+
+                    for g = 1:length(avgBearings)
+                        fprintf('Group %d | Bearing: %.2f | Confidence: %.3f | Trajectories: %d\n', ...
+                            g, avgBearings(g), groupConfidences(g), numel(groupIDs{g}));
+                    end
                     
                     %% B-TRAC II session data handling
                     appData.sessions(i).avgBearing = avgBearings;
                     appData.sessions(i).confidence = groupConfidences;
+                    appData.sessions(i).groupIDs = groupIDs;
+                    appData.sessions(i).referenceBearings = referenceBearings;
 
                     %% B-TRAC I session data handling
                     %% [appData.sessions(i).avgBearing, ...
@@ -424,6 +440,8 @@ function BTRAC_GUI()
 
                     appData.sessions(i).avgBearing = [];
                     appData.sessions(i).confidence = [];
+                    appData.sessions(i).groupIDs = {};
+                    appData.sessions(i).referenceBearings = [];
 
                 end
 
@@ -442,18 +460,63 @@ if ~NO_BEARINGANALYSIS
 
     if ~isempty(done)
 
-        % Display the grouped bearings from the most recently processed session
-        showGroupedResult(done(end));
-
+        % Count directional groups across all processed sessions.
         totalGroups = 0;
-
-        for k = 1:length(done)
-            totalGroups = totalGroups + length(done(k).avgBearing);
+        for k = 1:numel(done)
+            totalGroups = totalGroups + numel(done(k).avgBearing);
         end
 
-        setStatus(sprintf( ...
-            'Done. %d session(s) processed; %d bearing group(s) identified.', ...
-            length(done), totalGroups));
+        % Multi-hive triangulation requires at least two distinct stations.
+        % The triangulation function handles multiple groups per session.
+        usable = done(arrayfun(@(s) ...
+            numel(s.gpsCoords) >= 2 && all(isfinite(s.gpsCoords)) && ...
+            ~isempty(s.avgBearing) && ~isempty(s.confidence), done));
+
+        if numel(usable) >= 2
+            [hiveCandidates, triDiagnostics] = triangulateHiveClusters(usable);
+            appData.results.hiveCandidates = hiveCandidates;
+            appData.results.triangulationDiagnostics = triDiagnostics;
+
+            if ~isempty(hiveCandidates)
+                % Keep the legacy single-location field for downstream export
+                % compatibility, while retaining every candidate separately.
+                appData.results.estimatedHiveLocation = ...
+                    [hiveCandidates(1).lat, hiveCandidates(1).lon];
+
+                createMapVisualization(usable, hiveCandidates, resultsAxes);
+
+                fprintf('\n--- Multi-hive triangulation ---\n');
+                fprintf('Rays: %d | Forward intersections: %d | Candidates: %d\n', ...
+                    triDiagnostics.rayCount, triDiagnostics.intersectionCount, ...
+                    triDiagnostics.candidateCount);
+                for c = 1:numel(hiveCandidates)
+                    fprintf(['Candidate %d: %.6f, %.6f | %d sessions | ' ...
+                        '%d rays | mean confidence %.3f\n'], ...
+                        c, hiveCandidates(c).lat, hiveCandidates(c).lon, ...
+                        hiveCandidates(c).supportSessions, ...
+                        hiveCandidates(c).supportRays, ...
+                        hiveCandidates(c).meanConfidence);
+                end
+
+                setStatus(sprintf(['Done. %d session(s), %d group(s), ' ...
+                    '%d hive candidate(s) estimated.'], ...
+                    numel(done), totalGroups, numel(hiveCandidates)));
+            else
+                appData.results.estimatedHiveLocation = [];
+                showGroupedResult(done(end));
+                setStatus(sprintf(['%d session(s), %d group(s) processed; ' ...
+                    'no forward-ray candidate found.'], ...
+                    numel(done), totalGroups));
+            end
+        else
+            appData.results.hiveCandidates = [];
+            appData.results.triangulationDiagnostics = [];
+            appData.results.estimatedHiveLocation = [];
+            showGroupedResult(done(end));
+            setStatus(sprintf(['Done. %d session(s), %d group(s) identified. ' ...
+                'Need at least two GPS-tagged sessions for triangulation.'], ...
+                numel(done), totalGroups));
+        end
 
     else
 
@@ -470,6 +533,7 @@ else
 end
 
             exportBtn.Enable = 'on';
+            refreshVisualizationBtn.Enable = 'on';
 
         catch ME
             uialert(fig, ['Processing error: ' ME.message], 'Error', 'Icon', 'error');
@@ -478,6 +542,47 @@ end
         end
 
         lockUI(false);
+    end
+
+    function refreshVisualization()
+        % Recompute triangulation and redraw using stored session results.
+        % This callback does NOT call processVideo or rerun YOLO.
+        done = appData.sessions([appData.sessions.processed]);
+        usable = done(arrayfun(@(s) ...
+            numel(s.gpsCoords) >= 2 && all(isfinite(s.gpsCoords)) && ...
+            ~isempty(s.avgBearing) && ~isempty(s.confidence), done));
+
+        if numel(usable) < 2
+            uialert(fig, ...
+                'At least two processed, GPS-tagged sessions with bearing groups are required.', ...
+                'Cannot Refresh Visualization', 'Icon', 'warning');
+            return;
+        end
+
+        try
+            setStatus('Refreshing candidate locations from stored results...');
+            [hiveCandidates, triDiagnostics] = triangulateHiveClusters(usable);
+
+            appData.results.hiveCandidates = hiveCandidates;
+            appData.results.triangulationDiagnostics = triDiagnostics;
+
+            if isempty(hiveCandidates)
+                appData.results.estimatedHiveLocation = [];
+            else
+                appData.results.estimatedHiveLocation = ...
+                    [hiveCandidates(1).lat, hiveCandidates(1).lon];
+            end
+
+            createMapVisualization(usable, hiveCandidates, resultsAxes);
+
+            setStatus(sprintf('Visualization refreshed: %d candidate(s) from %d session(s).', ...
+                numel(hiveCandidates), numel(usable)));
+        catch ME
+            uialert(fig, ['Visualization refresh failed: ' ME.message], ...
+                'Refresh Error', 'Icon', 'error');
+            fprintf('Refresh error:\n%s\n', getReport(ME));
+            setStatus('Refresh failed - see MATLAB console.');
+        end
     end
 
     function doExport()
@@ -490,6 +595,8 @@ end
         results.yoloConfig            = appData.yoloConfig;
         results.analysisDate          = datetime('now');
         results.estimatedHiveLocation = appData.results.estimatedHiveLocation;
+        results.hiveCandidates = appData.results.hiveCandidates;
+        results.triangulationDiagnostics = appData.results.triangulationDiagnostics;
 
         exportResults(results, path, baseName, resultsAxes);
         uialert(fig, sprintf('Saved to:\n%s', path), 'Export Complete', 'Icon', 'success');
@@ -523,6 +630,7 @@ end
         processBtn.Enable       = state;
         addSessionBtn.Enable    = state;
         removeSessionBtn.Enable = state;
+        refreshVisualizationBtn.Enable = state;
     end
 
     function showSingleResult(sess)
@@ -551,48 +659,141 @@ function showGroupedResult(sess)
     cla(resultsAxes);
 
     if isempty(angles)
-
         text(resultsAxes, 0.5, 0.5, 'No departures detected.', ...
              'HorizontalAlignment', 'center', ...
              'Units', 'normalized', ...
              'FontSize', 14);
-
         return;
-
     end
 
-    % Plot individual trajectory bearings
-    histogram(resultsAxes, angles, 36, ...
-              'FaceColor', [0.3 0.7 0.3], ...
-              'EdgeColor', 'k');
+    if isempty(groupBearings)
+        text(resultsAxes, 0.5, 0.5, ...
+             'No directional groups identified.', ...
+             'HorizontalAlignment', 'center', ...
+             'Units', 'normalized', ...
+             'FontSize', 14);
+        return;
+    end
 
     hold(resultsAxes, 'on');
 
-    % Mark average bearing and display confidence for each group
-    for g = 1:length(groupBearings)
+    % Count trajectories assigned to each directional group.
+    nGroups = numel(groupBearings);
+    groupCounts = zeros(nGroups,1);
 
-        xline(resultsAxes, groupBearings(g), '--', ...
-              sprintf('Group %d: %.1f deg | Conf: %.3f', ...
-              g, groupBearings(g), groupConfidences(g)), ...
-              'LineWidth', 1.5, ...
-              'LabelVerticalAlignment', 'middle');
-
+    for g = 1:nGroups
+        if numel(sess.groupIDs) >= g
+            groupCounts(g) = numel(sess.groupIDs{g});
+        end
     end
+
+    % Rose plot settings.
+    maxCount = max(groupCounts);
+    if maxCount == 0
+        maxCount = 1;
+    end
+
+    roseMax = maxCount * 1.35;
+
+    % Background and grid rings.
+    resultsAxes.Color = [0.97 0.97 0.99];
+    resultsAxes.XColor = [0.3 0.3 0.3];
+    resultsAxes.YColor = [0.3 0.3 0.3];
+
+    theta = linspace(0, 2*pi, 200);
+
+    for ri = 1:4
+        rv = maxCount * ri/4;
+        plot(resultsAxes, rv*cos(theta), rv*sin(theta), ...
+             ':', 'Color', [0.75 0.75 0.75], ...
+             'LineWidth', 0.8, 'HandleVisibility', 'off');
+    end
+
+    % Compass spokes and cardinal labels.
+    directions = {0,'N'; 90,'E'; 180,'S'; 270,'W'};
+
+    for d = 1:4
+        compassAngle = deg2rad(90 - directions{d,1});
+
+        plot(resultsAxes, ...
+             [0 roseMax*cos(compassAngle)], ...
+             [0 roseMax*sin(compassAngle)], ...
+             '-', 'Color', [0.8 0.8 0.8], ...
+             'LineWidth', 0.9, 'HandleVisibility', 'off');
+
+        text(resultsAxes, ...
+             roseMax*1.13*cos(compassAngle), ...
+             roseMax*1.13*sin(compassAngle), ...
+             directions{d,2}, ...
+             'HorizontalAlignment', 'center', ...
+             'FontSize', 12, 'FontWeight', 'bold');
+    end
+
+    % Draw one radial bar for each directional group.
+    barWidth = deg2rad(8);
+
+    for g = 1:nGroups
+
+        bearing = groupBearings(g);
+        count = groupCounts(g);
+        conf = max(0,min(1,groupConfidences(g)));
+
+        % Compass bearing: North = up, clockwise.
+        thetaCenter = deg2rad(90 - bearing);
+
+        thetaBar = linspace( ...
+            thetaCenter-barWidth/2, ...
+            thetaCenter+barWidth/2, 25);
+
+        % Confidence color: red -> yellow -> green.
+        if conf < 0.5
+            barColor = [1, 2*conf, 0];
+        else
+            barColor = [2*(1-conf), 1, 0];
+        end
+
+        patch(resultsAxes, ...
+            [0, count*cos(thetaBar), 0], ...
+            [0, count*sin(thetaBar), 0], ...
+            barColor, ...
+            'FaceAlpha', 0.80, ...
+            'EdgeColor', [0.2 0.2 0.2], ...
+            'LineWidth', 0.8);
+
+        % Group label outside the rose.
+        labelRadius = count + maxCount*0.16;
+
+        labelX = labelRadius*cos(thetaCenter);
+        labelY = labelRadius*sin(thetaCenter);
+
+        text(resultsAxes, labelX, labelY, ...
+            sprintf('G%d: %.1f deg', g, bearing), ...
+            'HorizontalAlignment', 'center', ...
+            'VerticalAlignment', 'middle', ...
+            'FontSize', 9, ...
+            'FontWeight', 'bold', ...
+            'Color', [0.1 0.1 0.1], ...
+            'BackgroundColor', [1 1 1], ...
+            'EdgeColor', [0.4 0.4 0.4], ...
+            'Margin', 3);
+    end
+
+    % Plot formatting.
+    axis(resultsAxes, 'equal');
+    axis(resultsAxes, 'off');
+
+    xlim(resultsAxes, [-roseMax*1.45 roseMax*1.45]);
+    ylim(resultsAxes, [-roseMax*1.45 roseMax*1.45]);
+
+    title(resultsAxes, ...
+        sprintf('%s - Directional Bearing Rose (n=%d, groups=%d)', ...
+        sess.name, numel(angles), nGroups), ...
+        'FontSize', 13, 'FontWeight', 'bold');
 
     hold(resultsAxes, 'off');
 
-    xlabel(resultsAxes, 'Bearing (degrees from North)');
-    ylabel(resultsAxes, 'Number of trajectories');
-
-    title(resultsAxes, ...
-          sprintf('%s - Grouped Departure Bearings (n=%d, groups=%d)', ...
-          sess.name, length(angles), length(groupBearings)), ...
-          'FontSize', 12, 'FontWeight', 'bold');
-
-    xlim(resultsAxes, [0 360]);
-    grid(resultsAxes, 'on');
-
 end
+
 
 end % BTRAC_GUI  <-- closes the main function; file-local functions follow
 

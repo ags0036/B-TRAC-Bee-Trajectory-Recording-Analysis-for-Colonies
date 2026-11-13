@@ -1,35 +1,243 @@
-function [avgBearing, confidence] = bearingAnalysis(departureAngles)
-% Aggregate individual bearings beta_i into a single session average.
+function [avgBearing, confidence, groupIDs, referenceBearings] = ...
+    bearingAnalysis(angles, trajectoryIDs)
+% bearingAnalysis
+% Original B-TRAC I functionality: circular averaging and confidence
+% calculation are retained within each B-TRAC II directional group.
 %
-%  Report: "Multiple individual bearings collected at a single observation
-%  location are aggregated using statistical methods to produce averaged
-%  bearings that are more robust than single observations."
+% B-TRAC II:
+% Groups individual bee trajectory bearings into directional clusters.
 %
-%  Method: unit-vector mean on the unit circle
-%    v_i = [sin(beta_i), cos(beta_i)]
-%    v_mean = mean(v_i)
-%    avgBearing = atan2(v_mean(1), v_mean(2))  [mod 360]
+% Inputs:
+%   angles - Individual trajectory bearings (degrees)
+%   trajectoryIDs - Corresponding trajectory IDs
 %
-%  Confidence: resultant length R of the unit vectors (0=uniform, 1=perfect)
-%  scaled by sample size to penalise small N.
+% Outputs:
+%   avgBearing - Circular mean bearing for each group
+%   confidence - Confidence score for each group
+%   groupIDs - Trajectory IDs assigned to each group
+%   referenceBearings - Initial reference bearing for each group
 
-    if isempty(departureAngles)
-        avgBearing = NaN;  confidence = 0;  return;
+    %% SETTINGS - Parameters able to be adjusted
+
+    angleThreshold = 10;   % Parameter for first pass
+    minGroupSize = 5;      
+    outlierThreshold = 2;  % Parameter for second pass
+
+    reassignmentThreshold = angleThreshold + outlierThreshold;
+
+
+    %% VALIDATE INPUTS
+
+    avgBearing = [];
+    confidence = [];
+    groupIDs = {};
+    referenceBearings = [];
+
+    if isempty(angles) || isempty(trajectoryIDs)
+        return;
     end
 
-    clean = removeOutliers(departureAngles);
+    angles = angles(:);
+    trajectoryIDs = trajectoryIDs(:);
 
-    % Unit vector mean (report: v_i = [sin(beta); cos(beta)])
-    r          = deg2rad(clean);
-    vE         = mean(sin(r));   % East component
-    vN         = mean(cos(r));   % North component
-    avgBearing = mod(rad2deg(atan2(vE, vN)), 360);
+    if length(angles) ~= length(trajectoryIDs)
+        error('The number of bearings must match the number of trajectory IDs.');
+    end
 
-    % Resultant length R (concentration measure)
-    R_len  = sqrt(vE^2 + vN^2);          % in [0, 1]
-    n      = length(clean);
-    % Confidence: grows with R (tight cluster) and with sample size
-    confidence = R_len * (1 - exp(-n / 20));
+    % Remove invalid bearings while preserving matching IDs
+    valid = isfinite(angles) & isfinite(trajectoryIDs);
+
+    validBearings = mod(angles(valid), 360);
+    validIDs = trajectoryIDs(valid);
+
+    if isempty(validBearings)
+        return;
+    end
+
+
+    %% FIRST PASS: GROUP TRAJECTORIES BY BEARING CONCENTRATION
+
+    unassigned = true(size(validBearings));
+
+    groups = {};
+    groupIDs = {};
+    referenceBearings = [];
+
+    groupNumber = 0;
+
+    while any(unassigned)
+
+        remainingBearings = validBearings(unassigned);
+        remainingIDs = validIDs(unassigned);
+
+        remainingIndices = find(unassigned);
+
+        bestCount = 0;
+        bestReference = NaN;
+        bestMembers = [];
+
+        % Find the densest +/- angleThreshold concentration
+        for i = 1:length(remainingBearings)
+
+            referenceBearing = remainingBearings(i);
+
+            angularDistance = abs( ...
+                mod(remainingBearings - referenceBearing + 180, 360) - 180);
+
+            members = angularDistance <= angleThreshold;
+            count = sum(members);
+
+            if count > bestCount
+                bestCount = count;
+                bestReference = referenceBearing;
+                bestMembers = members;
+            end
+
+        end
+
+        % Create group
+        groupNumber = groupNumber + 1;
+
+        groups{groupNumber} = remainingBearings(bestMembers);
+        groupIDs{groupNumber} = remainingIDs(bestMembers);
+
+        referenceBearings(groupNumber) = bestReference;
+
+        % Remove assigned trajectories
+        unassigned(remainingIndices(bestMembers)) = false;
+
+    end
+
+
+    %% SECOND PASS: REASSIGN BORDERLINE TRAJECTORIES
+
+    changed = true;
+
+    while changed
+
+        changed = false;
+
+        groupSizes = cellfun(@length, groupIDs);
+
+        % Only groups larger than minGroupSize are destinations
+        largeGroups = find(groupSizes > minGroupSize);
+
+        if isempty(largeGroups)
+            break;
+        end
+
+        for g = 1:length(groups)
+
+            groupSizes = cellfun(@length, groupIDs);
+
+            if groupSizes(g) > minGroupSize
+                continue;
+            end
+
+            if isempty(groupIDs{g})
+                continue;
+            end
+
+            % Snapshot small group before reassignment
+            smallGroupIDs = groupIDs{g};
+            smallGroupBearings = groups{g};
+
+            for i = 1:length(smallGroupIDs)
+
+                trajectoryID = smallGroupIDs(i);
+                trajectoryBearing = smallGroupBearings(i);
+
+                bestGroup = NaN;
+                bestDistance = Inf;
+
+                for j = 1:length(largeGroups)
+
+                    targetGroup = largeGroups(j);
+
+                    if targetGroup == g
+                        continue;
+                    end
+
+                    targetReference = referenceBearings(targetGroup);
+
+                    angularDistance = abs( ...
+                        mod(trajectoryBearing - targetReference + 180, 360) - 180);
+
+                    if angularDistance > angleThreshold && ...
+                            angularDistance <= reassignmentThreshold
+
+                        if angularDistance < bestDistance
+                            bestDistance = angularDistance;
+                            bestGroup = targetGroup;
+                        end
+
+                    end
+
+                end
+
+                % Move trajectory if an eligible group was found
+                if ~isnan(bestGroup)
+
+                    groupIDs{bestGroup}(end + 1) = trajectoryID;
+                    groups{bestGroup}(end + 1) = trajectoryBearing;
+
+                    removeIndex = find(groupIDs{g} == trajectoryID, 1);
+
+                    if ~isempty(removeIndex)
+                        groupIDs{g}(removeIndex) = [];
+                        groups{g}(removeIndex) = [];
+                    end
+
+                    changed = true;
+
+                end
+
+            end
+
+        end
+
+    end
+
+
+    %% REMOVE EMPTY GROUPS
+
+    nonemptyGroups = ~cellfun(@isempty, groupIDs);
+
+    groups = groups(nonemptyGroups);
+    groupIDs = groupIDs(nonemptyGroups);
+    referenceBearings = referenceBearings(nonemptyGroups);
+
+
+    %% CALCULATE FINAL GROUP BEARINGS AND CONFIDENCE
+
+    numGroups = length(groups);
+
+    avgBearing = nan(numGroups, 1);
+    confidence = zeros(numGroups, 1);
+
+    for g = 1:numGroups
+
+        groupBearings = groups{g};
+
+        % Circular mean bearing (original B-TRAC I averaging method)
+        r = deg2rad(groupBearings);
+
+        vE = mean(sin(r));
+        vN = mean(cos(r));
+
+        avgBearing(g) = mod(rad2deg(atan2(vE, vN)), 360);
+
+        % Resultant length
+        R_len = sqrt(vE^2 + vN^2);
+
+        % Confidence based on directional agreement and trajectory support
+        n = length(groupBearings);
+        referenceCount = 5;  % Tunable parameter, not a universal threshold of any sort
+
+        confidence(g) = R_len * min(n / referenceCount, 1);
+
+    end
+
 end
 
 
@@ -92,132 +300,6 @@ function hive = triangulateHive(sessions)
     [hLat, hLon] = xy2ll(p_best(1), p_best(2), rLat, rLon);
     hive = [hLat, hLon];
 end
-
-% Moved to its own file
-% function createMapVisualization(sessions, hive, ax)
-% % Draw the full map:
-% %   - Bearing rays from each observation point (unit direction vectors)
-% %   - Pairwise intersection points of all rays
-% %   - Least-squares best-fit hive location
-% %   - Observation point markers with session labels
-% %
-% % Local ENU coordinate system centred on the map centroid.
-% 
-%     nObs    = length(sessions);
-%     obsLats = arrayfun(@(s) s.gpsCoords(1), sessions);
-%     obsLons = arrayfun(@(s) s.gpsCoords(2), sessions);
-%     brgs    = arrayfun(@(s) s.avgBearing,   sessions);
-%     confs   = arrayfun(@(s) s.confidence,   sessions);
-% 
-%     % Common ENU origin = centroid of all points including hive
-%     cLat = mean([obsLats, hive(1)]);
-%     cLon = mean([obsLons, hive(2)]);
-% 
-%     [obsX, obsY]   = ll2xy(obsLats, obsLons, cLat, cLon);
-%     [hiveX, hiveY] = ll2xy(hive(1), hive(2), cLat, cLon);
-% 
-%     cla(ax);  hold(ax, 'on');
-%     setAxesBounds(ax, [obsX, hiveX], [obsY, hiveY]);
-% 
-%     RAY_LEN = 5000;  % metres - length of drawn bearing rays
-% 
-%     % ── 1. Bearing rays (r_i(t) = p_i + t*v_i) ──────────────────────────
-%     % Store endpoints for intersection calculation
-%     rayEnds = zeros(nObs, 2);
-%     for i = 1:nObs
-%         % Unit direction vector: v = [sin(beta), cos(beta)]
-%         v      = [sind(brgs(i)), cosd(brgs(i))];
-%         endPt  = [obsX(i), obsY(i)] + RAY_LEN * v;
-%         rayEnds(i,:) = endPt;
-% 
-%         col = confColor(confs(i));
-%         lw  = 1.5 + 2 * confs(i);
-%         plot(ax, [obsX(i), endPt(1)], [obsY(i), endPt(2)], ...
-%              '-', 'Color', col, 'LineWidth', lw);
-%         drawArrow(ax, obsX(i), obsY(i), endPt(1), endPt(2), col, 40);
-%     end
-% 
-%     % ── 2. Pairwise intersections (all ray pairs) ──────────────────────
-%     % Line i: p = P_i + t * v_i
-%     % Solve: [v_i, -v_j] * [t; u] = P_j - P_i  (2x2 linear system)
-%     EPS_PARALLEL = 1e-10;
-%     intersections = [];
-%     for i = 1:nObs
-%         for j = i+1:nObs
-%             p1 = [obsX(i); obsY(i)];
-%             p2 = [obsX(j); obsY(j)];
-%             v1 = [sind(brgs(i)); cosd(brgs(i))];
-%             v2 = [sind(brgs(j)); cosd(brgs(j))];
-% 
-%             Amat = [v1, -v2];
-%             detA = det(Amat);
-%             if abs(detA) < EPS_PARALLEL, continue; end  % near-parallel rays
-% 
-%             tu   = Amat \ (p2 - p1);
-%             t    = tu(1);
-%             if t < 0, continue; end   % intersection behind observation point
-% 
-%             pInt = p1 + t * v1;
-%             intersections(end+1, :) = pInt'; %#ok<AGROW>
-%         end
-%     end
-% 
-%     if ~isempty(intersections)
-%         plot(ax, intersections(:,1), intersections(:,2), 'bx', ...
-%              'MarkerSize', 10, 'LineWidth', 2, 'DisplayName', 'Ray Intersections');
-%     end
-% 
-%     % ── 3. Observation point markers ──────────────────────────────────
-%     for i = 1:nObs
-%         plot(ax, obsX(i), obsY(i), 'o', 'MarkerSize', 12, ...
-%              'MarkerFaceColor', [0.2 0.4 0.8], 'MarkerEdgeColor', 'white', 'LineWidth', 2);
-%         text(ax, obsX(i)+30, obsY(i)+30, sessions(i).name, ...
-%              'FontSize', 10, 'FontWeight', 'bold', 'BackgroundColor', [1 1 1 0.7]);
-%     end
-% 
-%     % ── 4. Best-fit hive (p*) ─────────────────────────────────────────
-%     plot(ax, hiveX, hiveY, 'p', 'MarkerSize', 28, ...
-%          'MarkerFaceColor', [0.2 0.8 0.2], 'MarkerEdgeColor', 'black', 'LineWidth', 2);
-%     text(ax, hiveX+40, hiveY+40, sprintf('Best-fit Hive\n%.6f, %.6f', hive(1), hive(2)), ...
-%          'FontSize', 11, 'FontWeight', 'bold', 'Color', [0 0.5 0], ...
-%          'BackgroundColor', [1 1 1 0.85]);
-% 
-%     % ── Axis formatting ───────────────────────────────────────────────
-%     axis(ax, 'equal');  grid(ax, 'on');
-%     xlabel(ax, 'East (m)',  'FontWeight', 'bold');
-%     ylabel(ax, 'North (m)', 'FontWeight', 'bold');
-%     title(ax, sprintf('B-TRAC: Estimated Hive Location [%.6f, %.6f]', hive(1), hive(2)), ...
-%           'FontSize', 12, 'FontWeight', 'bold');
-% 
-%     % Legend
-%     legend(ax, {'Bearing Ray','','Pairwise Intersection','Observation Point','','Best-fit Hive'}, ...
-%            'Location', 'bestoutside', 'FontSize', 9);
-% 
-%     addScaleBar(ax);
-%     addCompassRose(ax);
-%     hold(ax, 'off');
-% end
-
-% Moved to its own file
-% function exportResults(results, savePath, baseName, ax)
-% % Save .mat, map PNG, per-session bearing CSVs, and text summary.
-%     save(fullfile(savePath, [baseName '.mat']), 'results');
-%     try
-%         exportgraphics(ax, fullfile(savePath, [baseName '_map.png']), 'Resolution', 300);
-%     catch
-%         warning('Map image export failed.');
-%     end
-%     for i = 1:length(results.sessions)
-%         s = results.sessions(i);
-%         if s.processed && ~isempty(s.departureAngles)
-%             T = table((1:length(s.departureAngles))', s.departureAngles, ...
-%                       'VariableNames', {'TrajectoryID', 'Bearing_Degrees'});
-%             writetable(T, fullfile(savePath, ...
-%                        sprintf('%s_session%d_bearings.csv', baseName, i)));
-%         end
-%     end
-%     writeSummary(results, fullfile(savePath, [baseName '_summary.txt']));
-% end
 
 
 %% =========================================================================
