@@ -89,6 +89,14 @@ function createMapVisualization(sessions, candidates, ax)
         bearings = sessions(s).avgBearing;
 
         for g = 1:numel(bearings)
+            % Skip groups containing only one trajectory.
+            if isfield(sessions, 'groupIDs') && ...
+                    numel(sessions(s).groupIDs) >= g
+
+                if numel(sessions(s).groupIDs{g}) <= 1
+                    continue;
+                end
+            end
             bearing = bearings(g);
             if ~isfinite(bearing)
                 continue;
@@ -111,10 +119,10 @@ function createMapVisualization(sessions, candidates, ax)
             quiver(ax, arrowStart(1), arrowStart(2), ...
                 arrowLength*v(1), arrowLength*v(2), 0, ...
                 'Color', allRayColor, 'LineWidth', 1.2, ...
-                'MaxHeadSize', 1.8, 'HandleVisibility', 'off');
+                'MaxHeadSize', 3.8, 'HandleVisibility', 'off');
 
-            allX(end+1,1) = endpoint(1); %#ok<AGROW>
-            allY(end+1,1) = endpoint(2); %#ok<AGROW>
+            allX(end+1,1) = endpoint(1); 
+            allY(end+1,1) = endpoint(2); 
         end
     end
 
@@ -142,6 +150,15 @@ function createMapVisualization(sessions, candidates, ax)
                     s < 1 || s > numel(sessions) || ...
                     g < 1 || g > numel(sessions(s).avgBearing)
                 continue;
+            end
+
+            % Do not highlight single-trajectory groups.
+            if isfield(sessions, 'groupIDs') && ...
+                    numel(sessions(s).groupIDs) >= g
+
+                if numel(sessions(s).groupIDs{g}) <= 1
+                    continue;
+                end
             end
 
             bearing = sessions(s).avgBearing(g);

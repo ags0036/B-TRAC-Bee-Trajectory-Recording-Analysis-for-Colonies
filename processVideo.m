@@ -145,7 +145,7 @@ function cfg = applyDefaults(cfg)
     cfg.useYOLO             = true;
     if ~isfield(cfg, 'confidenceThreshold'), cfg.confidenceThreshold = 0.35;  end
     if ~isfield(cfg, 'frameSample'),         cfg.frameSample         = 1;     end
-    if ~isfield(cfg, 'imgSize'),             cfg.imgSize             = 1280;  end
+    if ~isfield(cfg, 'imgSize'),             cfg.imgSize             = 960;  end % altered from 1280
     if ~isfield(cfg, 'classId'),             cfg.classId             = 0;     end
     if ~isfield(cfg, 'trackingMethod'),      cfg.trackingMethod = 'nearest';  end
 end

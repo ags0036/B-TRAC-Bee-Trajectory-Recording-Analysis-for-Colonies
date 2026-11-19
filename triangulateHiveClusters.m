@@ -8,13 +8,13 @@ function [candidates, diagnostics] = triangulateHiveClusters(sessions, options)
 %   avgBearing  True-compass bearings, clockwise from north
 %   confidence  Confidence values corresponding to each bearing group
 %
-% Optional session field:
-%   groupIDs    Cell array containing trajectory IDs for each group
+% Required session field:
+%   groupIDs    Cell array containing trajectory IDs for each bearing group
 %
 % Options:
 %   clusterRadiusMeters     Default: 150
 %   minSupportingSessions   Default: 2
-%   minSupportingRays       Default: 3
+%   minSupportingRays       Default: 2
 %   minClusterIntersections Default: 2
 %   parallelAngleDeg        Default: 1
 %
@@ -34,7 +34,7 @@ function [candidates, diagnostics] = triangulateHiveClusters(sessions, options)
 
     radius = getOption(options, 'clusterRadiusMeters', 150);
     minSessions = getOption(options, 'minSupportingSessions', 2);
-    minRays = getOption(options, 'minSupportingRays', 3);
+    minRays = getOption(options, 'minSupportingRays', 2);
     minIntersections = getOption(options, 'minClusterIntersections', 2);
     parallelDeg = getOption(options, 'parallelAngleDeg', 1);
 
@@ -71,6 +71,7 @@ function [candidates, diagnostics] = triangulateHiveClusters(sessions, options)
 
     diagnostics = struct( ...
         'rayCount',0, ...
+        'singletonRaysRejected', 0, ...
         'pairCount',0, ...
         'intersectionCount',0, ...
         'parallelRejected',0, ...
@@ -103,60 +104,91 @@ function [candidates, diagnostics] = triangulateHiveClusters(sessions, options)
 
     [stationE, stationN] = ll2xy(lats, lons, refLat, refLon);
 
-    %% Convert directional groups into individual rays
+%% Convert directional groups into individual rays
 
-    rays = struct( ...
-        'p',{}, ...
-        'v',{}, ...
-        'session',{}, ...
-        'group',{}, ...
-        'confidence',{}, ...
-        'groupSize',{});
+% Singleton filtering requires trajectory IDs for every bearing group.
+% Fail explicitly rather than silently allowing unverified rays through.
+if ~isfield(sessions, 'groupIDs')
+    error('triangulateHiveClusters:MissingGroupIDs', ...
+        ['Session data is missing groupIDs. Save trajectory IDs ', ...
+         'for each bearing group before calling triangulation.']);
+end
 
-    for s = 1:numel(sessions)
+rays = struct( ...
+    'p',{}, ...
+    'v',{}, ...
+    'session',{}, ...
+    'group',{}, ...
+    'confidence',{}, ...
+    'groupSize',{});
 
-        bearings = sessions(s).avgBearing;
-        conf = sessions(s).confidence;
+for s = 1:numel(sessions)
 
-        if isempty(bearings)
+    bearings = sessions(s).avgBearing;
+    conf = sessions(s).confidence;
+    sessionGroupIDs = sessions(s).groupIDs;
+
+    % Verify that every bearing has a corresponding groupIDs cell.
+    if ~iscell(sessionGroupIDs) || ...
+            numel(sessionGroupIDs) ~= numel(bearings)
+
+        error('triangulateHiveClusters:GroupIDSizeMismatch', ...
+            ['Session %d must have one groupIDs cell per bearing. ', ...
+             'Found %d groupIDs entries for %d bearings.'], ...
+            s, numel(sessionGroupIDs), numel(bearings));
+    end
+
+    if isempty(bearings)
+        continue;
+    end
+
+    if numel(conf) ~= numel(bearings)
+        error('triangulateHiveClusters:FieldSizeMismatch', ...
+            'Session %d has %d bearings but %d confidence values.', ...
+            s, numel(bearings), numel(conf));
+    end
+
+    for g = 1:numel(bearings)
+
+        if ~isfinite(bearings(g)) || ~isfinite(conf(g))
             continue;
         end
 
-        if numel(conf) ~= numel(bearings)
-            error('triangulateHiveClusters:FieldSizeMismatch', ...
-                'Session %d has %d bearings but %d confidence values.', ...
-                s, numel(bearings), numel(conf));
+        % Verify this bearing group has trajectory IDs.
+        if isempty(sessionGroupIDs{g})
+            error('triangulateHiveClusters:EmptyGroupIDs', ...
+                'Session %d, Group %d has no trajectory IDs.', s, g);
         end
 
-        for g = 1:numel(bearings)
+        % Determine number of trajectories in this group.
+        groupSize = numel(sessionGroupIDs{g});
 
-            if ~isfinite(bearings(g)) || ~isfinite(conf(g))
-                continue;
-            end
+        % Exclude groups containing fewer than two trajectories.
+        if groupSize < 2
 
-            groupSize = NaN;
+            diagnostics.singletonRaysRejected = ...
+                diagnostics.singletonRaysRejected + 1;
 
-            if isfield(sessions, 'groupIDs') && ...
-                    numel(sessions(s).groupIDs) >= g
-
-                groupSize = numel(sessions(s).groupIDs{g});
-            end
-
-            rays(end+1) = struct( ... %#ok<AGROW>
-                'p',[stationE(s); stationN(s)], ...
-                'v',[sind(bearings(g)); cosd(bearings(g))], ...
-                'session',s, ...
-                'group',g, ...
-                'confidence',max(0,min(1,conf(g))), ...
-                'groupSize',groupSize);
+            continue;
         end
-    end
 
-    diagnostics.rayCount = numel(rays);
+        % Add valid directional ray.
+        rays(end+1) = struct( ...
+            'p',[stationE(s); stationN(s)], ...
+            'v',[sind(bearings(g)); cosd(bearings(g))], ...
+            'session',s, ...
+            'group',g, ...
+            'confidence',max(0,min(1,conf(g))), ...
+            'groupSize',groupSize);
 
-    if isempty(rays)
-        return;
     end
+end
+
+diagnostics.rayCount = numel(rays);
+
+if isempty(rays)
+    return;
+end
 
     %% Calculate forward intersections between different stations
 
@@ -578,10 +610,35 @@ function [candidates, diagnostics] = triangulateHiveClusters(sessions, options)
         diagnostics.intersectionCount, ...
         diagnostics.candidateCount);
 
+    fprintf('Singleton rays rejected: %d\n', ...
+        diagnostics.singletonRaysRejected);
+
+    
+    % Diagnostics Testing
     fprintf('Parallel rejected: %d\n', diagnostics.parallelRejected);
     fprintf('Behind-ray rejected: %d\n', diagnostics.behindRayRejected);
     fprintf('Oversized clusters rejected: %d\n', ...
         diagnostics.oversizedClusterRejected);
+
+    fprintf('\n--- Candidate Rejection Breakdown ---\n');
+
+fprintf('Insufficient intersections: %d\n', ...
+    diagnostics.insufficientIntersectionRejected);
+
+fprintf('Insufficient supporting sessions: %d\n', ...
+    diagnostics.insufficientSessionRejected);
+
+fprintf('Insufficient unique rays: %d\n', ...
+    diagnostics.insufficientRayRejected);
+
+fprintf('Oversized clusters: %d\n', ...
+    diagnostics.oversizedClusterRejected);
+
+fprintf('Ill-conditioned geometry: %d\n', ...
+    diagnostics.illConditionedRejected);
+
+fprintf('Candidate behind supporting ray: %d\n', ...
+    diagnostics.behindFitRejected);
 
     for c = 1:numel(candidates)
 
